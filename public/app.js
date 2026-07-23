@@ -1195,7 +1195,7 @@ async function loadFooterMeta() {
       footerVersionEl.textContent = `v${data.version}`;
     }
   } catch {
-    footerVersionEl.textContent = footerVersionEl.textContent || 'v0.2.24';
+    footerVersionEl.textContent = footerVersionEl.textContent || 'v0.2.25';
   }
 }
 

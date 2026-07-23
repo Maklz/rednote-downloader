@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.2.25 - 2026-07-23
+
+- Add Huawei and Baidu CDN fallbacks for supported high-resolution Xiaohongshu image URLs.
+- Remove obsolete Chrome cookie reader code and temporary implementation notes.
+
 ## v0.2.24 - 2026-07-23
 
 - Accept `xhslink.cn` and `www.xhslink.cn` Xiaohongshu short links.
