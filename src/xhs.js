@@ -11,6 +11,8 @@ import { downloadDouyinViaExternalService } from './douyin-external.js';
 const XHS_SHARE_HOSTS = new Set([
   'xhslink.com',
   'www.xhslink.com',
+  'xhslink.cn',
+  'www.xhslink.cn',
   'xiaohongshu.com',
   'www.xiaohongshu.com',
 ]);

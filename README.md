@@ -8,7 +8,7 @@
 
 ## 主要功能
 
-- 小红书 / RedNote：支持分享文案、`xhslink.com` 短链和页面链接解析下载。
+- 小红书 / RedNote：支持分享文案、`xhslink.com` / `xhslink.cn` 短链和页面链接解析下载。
 - X / Twitter：支持帖子图片、视频媒体解析和代理下载。
 - 抖音：支持单视频分享文案、短链和 `douyin.com/video/{aweme_id}`，Docker 镜像内置下载器，默认单容器可用。
 - Web UI：输入链接即可预览图片/视频，支持浏览器代理下载和服务端保存。

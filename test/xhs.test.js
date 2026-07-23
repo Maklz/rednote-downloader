@@ -18,6 +18,7 @@ import {
   extractTwitterMedia,
   extractVideo,
   fetchMediaResponse,
+  fetchNotePage,
   getNoteData,
   normalizeTwitterPhotoUrl,
   parseNoteFromHtml,
@@ -43,6 +44,29 @@ https://x.com/demo/status/1
     'https://x.com/demo/status/1',
     'https://www.xiaohongshu.com/explore/abc123?xsec_token=demo',
   ]);
+});
+
+test('fetchNotePage accepts xhslink.cn short URLs', async () => {
+  const originalFetch = global.fetch;
+  let requestedUrl = null;
+
+  global.fetch = async (input) => {
+    requestedUrl = input.toString();
+    return {
+      ok: false,
+      status: 404,
+    };
+  };
+
+  try {
+    await assert.rejects(
+      fetchNotePage('https://xhslink.cn/a/abc123'),
+      /Failed to fetch note page: 404/,
+    );
+    assert.equal(requestedUrl, 'https://xhslink.cn/a/abc123');
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test('deriveOriginalImageUrl converts preview URL into ci download URL', () => {

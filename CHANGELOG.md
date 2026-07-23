@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.2.24 - 2026-07-23
+
+- Accept `xhslink.cn` and `www.xhslink.cn` Xiaohongshu short links.
+
 ## v0.2.23 - 2026-05-10
 
 - Bundle `jiji262/douyin-downloader` REST mode into the Docker image for one-container Douyin server-side downloads.

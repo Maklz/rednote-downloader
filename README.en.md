@@ -8,7 +8,7 @@ Starting with `v0.2.23`, the Docker image bundles the REST mode of `jiji262/douy
 
 ## Highlights
 
-- RedNote / Xiaohongshu: resolve share text, `xhslink.com` short links, and page URLs.
+- RedNote / Xiaohongshu: resolve share text, `xhslink.com` / `xhslink.cn` short links, and page URLs.
 - X / Twitter: resolve post images and videos, then download through the local proxy.
 - Douyin: resolve single-video share text, short links, and `douyin.com/video/{aweme_id}` URLs; Docker images include a bundled downloader by default.
 - Web UI: paste a link, preview images/videos, download through the browser proxy, or save server-side.
