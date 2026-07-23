@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 import {
   buildFixTwitterApiUrl,
   deriveNoteFileStem,
+  deriveXhsImageCdnFallbackUrls,
   downloadMedia,
   extractAllUrls,
   deriveOriginalImageUrl,
@@ -43,6 +44,29 @@ https://x.com/demo/status/1
   assert.deepEqual(extractAllUrls(input), [
     'https://x.com/demo/status/1',
     'https://www.xiaohongshu.com/explore/abc123?xsec_token=demo',
+  ]);
+});
+
+test('derives Huawei and Baidu CDN fallbacks from a 1040g image URL', () => {
+  const input = 'https://sns-webpic-qc.xhscdn.com/202511292028/30ab642bea120348cf64a607c9eb8141/1040g00830t2hgqelk4005o49b2u097vri7c1ij8!nd_dft_wlteh_webp_3';
+
+  assert.deepEqual(deriveXhsImageCdnFallbackUrls(input), [
+    'https://sns-img-hw.xhscdn.com/1040g00830t2hgqelk4005o49b2u097vri7c1ij8?imageView2/2/w/format/png',
+    'https://sns-img-bd.xhscdn.com/1040g00830t2hgqelk4005o49b2u097vri7c1ij8?imageView2/2/w/format/png',
+  ]);
+});
+
+test('extractImages keeps the ci URL primary and exposes CDN fallbacks', () => {
+  const result = extractImages({
+    imageList: [{
+      urlDefault: 'https://sns-webpic-qc.xhscdn.com/202511292028/30ab642bea120348cf64a607c9eb8141/1040g00830t2hgqelk4005o49b2u097vri7c1ij8!nd_dft_wlteh_webp_3',
+    }],
+  });
+
+  assert.equal(result[0].url, 'https://ci.xiaohongshu.com/1040g00830t2hgqelk4005o49b2u097vri7c1ij8');
+  assert.deepEqual(result[0].fallbackUrls.slice(0, 2), [
+    'https://sns-img-hw.xhscdn.com/1040g00830t2hgqelk4005o49b2u097vri7c1ij8?imageView2/2/w/format/png',
+    'https://sns-img-bd.xhscdn.com/1040g00830t2hgqelk4005o49b2u097vri7c1ij8?imageView2/2/w/format/png',
   ]);
 });
 

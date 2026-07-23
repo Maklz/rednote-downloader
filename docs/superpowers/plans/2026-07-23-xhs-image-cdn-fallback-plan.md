@@ -16,7 +16,7 @@
 - Modify: `test/xhs.test.js:9-27`
 - Test: `test/xhs.test.js`
 
-- [ ] **Step 1: Import the new helper and add the expected URL test**
+- [x] **Step 1: Import the new helper and add the expected URL test**
 
 Add `deriveXhsImageCdnFallbackUrls` to the import list and add:
 
@@ -49,7 +49,7 @@ test('extractImages keeps the ci URL primary and exposes CDN fallbacks', () => {
 });
 ```
 
-- [ ] **Step 2: Run the focused tests and verify they fail for the missing helper**
+- [x] **Step 2: Run the focused tests and verify they fail for the missing helper**
 
 Run:
 
@@ -65,7 +65,7 @@ Expected: FAIL because `deriveXhsImageCdnFallbackUrls` is not exported and the c
 - Modify: `src/xhs.js:405-447`
 - Test: `test/xhs.test.js`
 
-- [ ] **Step 1: Add the independent fallback helper**
+- [x] **Step 1: Add the independent fallback helper**
 
 After `deriveOriginalImageUrl`, add:
 
@@ -90,7 +90,7 @@ export function deriveXhsImageCdnFallbackUrls(url) {
 }
 ```
 
-- [ ] **Step 2: Add the derived URLs to the existing candidate list**
+- [x] **Step 2: Add the derived URLs to the existing candidate list**
 
 Update `collectImageCandidates` so its return value is:
 
@@ -102,7 +102,7 @@ Update `collectImageCandidates` so its return value is:
 
 The existing score keeps `ci.xiaohongshu.com` as the primary URL, while the two new URLs become fallback candidates.
 
-- [ ] **Step 3: Run the focused tests and verify they pass**
+- [x] **Step 3: Run the focused tests and verify they pass**
 
 Run:
 
@@ -118,7 +118,7 @@ Expected: PASS, including both new fallback tests.
 - Verify: `src/xhs.js`
 - Verify: `test/xhs.test.js`
 
-- [ ] **Step 1: Run the full tests**
+- [x] **Step 1: Run the full tests**
 
 Run:
 
@@ -128,7 +128,7 @@ npm test
 
 Expected: all existing tests plus the two new fallback tests pass.
 
-- [ ] **Step 2: Validate the Docker compose files**
+- [x] **Step 2: Validate the Docker compose files**
 
 Run:
 
@@ -139,7 +139,7 @@ docker compose -f compose.unraid.yaml config
 
 Expected: both commands exit successfully.
 
-- [ ] **Step 3: Commit the implementation**
+- [x] **Step 3: Commit the implementation**
 
 ```bash
 git add src/xhs.js test/xhs.test.js

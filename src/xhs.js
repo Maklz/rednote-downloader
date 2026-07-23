@@ -420,6 +420,25 @@ export function deriveOriginalImageUrl(url) {
   return `https://ci.xiaohongshu.com/${match[1]}`;
 }
 
+export function deriveXhsImageCdnFallbackUrls(url) {
+  const normalized = normalizeImageUrl(url);
+  if (!normalized) {
+    return [];
+  }
+
+  const match = normalized.match(/https?:\/\/sns-webpic[^/]*\.xhscdn\.com\/\d+\/[0-9a-z]+\/(1040g[^!?]+)(?:!.*)?$/i);
+  if (!match?.[1]) {
+    return [];
+  }
+
+  const traceId = match[1];
+  const suffix = '?imageView2/2/w/format/png';
+  return [
+    `https://sns-img-hw.xhscdn.com/${traceId}${suffix}`,
+    `https://sns-img-bd.xhscdn.com/${traceId}${suffix}`,
+  ];
+}
+
 function scoreImageCandidate(url) {
   const lower = url.toLowerCase();
   let score = 0;
@@ -443,7 +462,8 @@ function collectImageCandidates(image) {
 
   const normalized = unique(rawCandidates.map(normalizeImageUrl));
   const derived = unique(normalized.map(deriveOriginalImageUrl));
-  return unique([...derived, ...normalized]);
+  const cdnFallbacks = unique(normalized.flatMap(deriveXhsImageCdnFallbackUrls));
+  return unique([...derived, ...cdnFallbacks, ...normalized]);
 }
 
 export function extractImages(note) {
