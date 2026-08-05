@@ -538,6 +538,19 @@ function inferNoteType(note) {
   return note?.video ? 'video' : 'normal';
 }
 
+function extractNoteMedia(note, type) {
+  const images = extractImages(note);
+
+  if (images.length > 1) {
+    const video = extractVideo(note);
+    return video ? [...images, video] : images;
+  }
+
+  return type === 'video'
+    ? [extractVideo(note)].filter(Boolean)
+    : images;
+}
+
 export function parseNoteFromHtml(html, noteUrl) {
   const state = extractInitialState(html);
   const note = getNoteData(state, noteUrl);
@@ -547,9 +560,7 @@ export function parseNoteFromHtml(html, noteUrl) {
   }
 
   const type = inferNoteType(note);
-  const media = type === 'video'
-    ? [extractVideo(note)].filter(Boolean)
-    : extractImages(note);
+  const media = extractNoteMedia(note, type);
 
   if (media.length === 0) {
     throw new Error('No downloadable media found in note data');
