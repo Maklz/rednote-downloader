@@ -192,6 +192,86 @@ test('parseNoteFromHtml supports noteData payload pages', () => {
   assert.equal(parsed.media[0].url, 'https://sns-video-bd.xhscdn.com/origin/video.mp4');
 });
 
+test('parseNoteFromHtml preserves gallery images before a synthesized video', () => {
+  const html = `
+    <html>
+      <body>
+        <script>
+          window.__INITIAL_STATE__={
+            "noteData":{
+              "data":{
+                "noteData":{
+                  "noteId":"mixed123",
+                  "title":"Mixed gallery note",
+                  "type":"video",
+                  "imageList":[
+                    {
+                      "urlDefault":"http://sns-webpic-qc.xhscdn.com/202401011200/abcd1234/gallery-one!nd_dft_wlteh_webp_3"
+                    },
+                    {
+                      "urlDefault":"http://sns-webpic-qc.xhscdn.com/202401011200/abcd1234/gallery-two!nd_dft_wlteh_webp_3"
+                    }
+                  ],
+                  "video":{
+                    "consumer":{"originVideoKey":"origin/gallery-video.mp4"},
+                    "media":{"stream":{}}
+                  }
+                }
+              }
+            }
+          }
+        </script>
+      </body>
+    </html>
+  `;
+
+  const parsed = parseNoteFromHtml(html, 'https://www.xiaohongshu.com/explore/mixed123');
+
+  assert.equal(parsed.type, 'video');
+  assert.deepEqual(parsed.media.map((item) => item.type), ['image', 'image', 'video']);
+  assert.deepEqual(parsed.media.map((item) => item.url), [
+    'https://ci.xiaohongshu.com/gallery-one',
+    'https://ci.xiaohongshu.com/gallery-two',
+    'https://sns-video-bd.xhscdn.com/origin/gallery-video.mp4',
+  ]);
+});
+
+test('parseNoteFromHtml keeps a single cover image out of genuine video media', () => {
+  const html = `
+    <html>
+      <body>
+        <script>
+          window.__INITIAL_STATE__={
+            "noteData":{
+              "data":{
+                "noteData":{
+                  "noteId":"video123",
+                  "type":"video",
+                  "imageList":[
+                    {
+                      "urlDefault":"http://sns-webpic-qc.xhscdn.com/202401011200/abcd1234/video-cover!nd_dft_wlteh_webp_3"
+                    }
+                  ],
+                  "video":{
+                    "consumer":{"originVideoKey":"origin/real-video.mp4"},
+                    "media":{"stream":{}}
+                  }
+                }
+              }
+            }
+          }
+        </script>
+      </body>
+    </html>
+  `;
+
+  const parsed = parseNoteFromHtml(html, 'https://www.xiaohongshu.com/explore/video123');
+
+  assert.equal(parsed.type, 'video');
+  assert.deepEqual(parsed.media.map((item) => item.type), ['video']);
+  assert.equal(parsed.media[0].url, 'https://sns-video-bd.xhscdn.com/origin/real-video.mp4');
+});
+
 test('ensureAllowedMediaUrl rejects non-xiaohongshu media hosts', () => {
   assert.throws(
     () => ensureAllowedMediaUrl('https://example.com/demo.jpg'),
