@@ -192,6 +192,77 @@ test('TelegramBotRunner does not acknowledge a later update when handling it fai
   }
 });
 
+test('TelegramBotRunner drops an update that keeps failing so the queue can advance', async () => {
+  const originalFetch = global.fetch;
+  const originalConsoleError = console.error;
+  const seenOffsets = [];
+  let sendMessageCount = 0;
+
+  global.fetch = async (url) => {
+    const target = String(url);
+
+    if (target.includes('/getUpdates')) {
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          result: [
+            {
+              update_id: 10,
+              message: {
+                chat: { id: 12345 },
+                text: '/help',
+                message_id: 77,
+              },
+            },
+          ],
+        }),
+      };
+    }
+
+    if (target.includes('/sendMessage')) {
+      sendMessageCount += 1;
+      throw new Error('permanent telegram send failure');
+    }
+
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  console.error = () => {};
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      deliveryMode: 'document',
+      initialOffset: 0,
+      onOffsetChange: async (offset) => {
+        seenOffsets.push(offset);
+      },
+    });
+
+    runner.running = true;
+
+    await assert.rejects(runner.pollOnce(), /permanent telegram send failure/);
+    assert.equal(runner.offset, 0);
+
+    await assert.rejects(runner.pollOnce(), /permanent telegram send failure/);
+    assert.equal(runner.offset, 0);
+
+    // Third attempt gives up on the poison update and acknowledges it.
+    await runner.pollOnce();
+
+    assert.equal(sendMessageCount, 3);
+    assert.deepEqual(seenOffsets, [11]);
+    assert.equal(runner.offset, 11);
+    assert.equal(runner.failedUpdateId, null);
+    assert.equal(runner.failedUpdateAttempts, 0);
+  } finally {
+    global.fetch = originalFetch;
+    console.error = originalConsoleError;
+  }
+});
+
 test('TelegramBotRunner uses fallback media URLs for Telegram uploads', async () => {
   const originalFetch = global.fetch;
   const seenTargets = [];

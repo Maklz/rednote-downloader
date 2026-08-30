@@ -13,6 +13,7 @@ const TELEGRAM_API_BASE = 'https://api.telegram.org';
 const POLL_TIMEOUT_SECONDS = 30;
 const MAX_CAPTION_LENGTH = 900;
 const TELEGRAM_MEDIA_GROUP_LIMIT = 10;
+const MAX_UPDATE_ATTEMPTS = 3;
 
 export function parseAllowedChatIds(input) {
   return new Set(
@@ -347,6 +348,8 @@ export class TelegramBotRunner {
     this.running = false;
     this.loopPromise = null;
     this.pollController = null;
+    this.failedUpdateId = null;
+    this.failedUpdateAttempts = 0;
   }
 
   async fetchUpdates() {
@@ -425,11 +428,33 @@ export class TelegramBotRunner {
         return;
       }
 
-      if (update.message) {
-        await this.handleMessage(update.message);
+      const updateId = update.update_id || 0;
+
+      try {
+        if (update.message) {
+          await this.handleMessage(update.message);
+        }
+
+        this.failedUpdateId = null;
+        this.failedUpdateAttempts = 0;
+      } catch (error) {
+        this.failedUpdateAttempts = this.failedUpdateId === updateId ? this.failedUpdateAttempts + 1 : 1;
+        this.failedUpdateId = updateId;
+
+        if (this.failedUpdateAttempts < MAX_UPDATE_ATTEMPTS) {
+          // Leave the offset untouched so Telegram redelivers this update on the next poll.
+          throw error;
+        }
+
+        console.error(
+          `[telegram] dropping update ${updateId} after ${this.failedUpdateAttempts} failed attempts:`,
+          error instanceof Error ? error.message : error,
+        );
+        this.failedUpdateId = null;
+        this.failedUpdateAttempts = 0;
       }
 
-      const nextOffset = Math.max(this.offset, (update.update_id || 0) + 1);
+      const nextOffset = Math.max(this.offset, updateId + 1);
       if (nextOffset !== this.offset) {
         this.offset = nextOffset;
         if (this.onOffsetChange) {
