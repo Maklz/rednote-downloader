@@ -67,6 +67,39 @@ test('GET /api/config no longer exposes agent integration config blocks', async 
   assert.equal(data.config.hermes, undefined);
 });
 
+test('admin endpoints reject a missing or wrong admin token', async (t) => {
+  const { origin } = await startTestApp(t, { adminToken: 'super-secret-token' });
+
+  const adminPaths = ['/api/config', '/api/telegram/status', '/api/diagnostics'];
+
+  for (const pathname of adminPaths) {
+    const anonymous = await fetch(`${origin}${pathname}`);
+    assert.equal(anonymous.status, 401, `anonymous ${pathname}`);
+
+    const wrongSameLength = await fetch(`${origin}${pathname}`, {
+      headers: { 'X-Admin-Token': 'super-secret-tokeX' },
+    });
+    assert.equal(wrongSameLength.status, 401, `wrong same-length ${pathname}`);
+
+    const wrongPrefix = await fetch(`${origin}${pathname}`, {
+      headers: { 'X-Admin-Token': 'super' },
+    });
+    assert.equal(wrongPrefix.status, 401, `prefix ${pathname}`);
+
+    const authorized = await fetch(`${origin}${pathname}`, {
+      headers: { 'X-Admin-Token': 'super-secret-token' },
+    });
+    assert.equal(authorized.status, 200, `authorized ${pathname}`);
+  }
+});
+
+test('admin endpoints stay open when no admin token is configured', async (t) => {
+  const { origin } = await startTestApp(t, { adminToken: '' });
+
+  const response = await fetch(`${origin}/api/config`);
+  assert.equal(response.status, 200);
+});
+
 test('GET /api/diagnostics includes external Douyin downloader status', async (t) => {
   const { origin } = await startTestApp(t, {
     env: {

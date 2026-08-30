@@ -1,5 +1,6 @@
 import http from 'node:http';
 import path from 'node:path';
+import { timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { access, mkdir, readFile, stat } from 'node:fs/promises';
@@ -381,10 +382,21 @@ export async function createRednoteApp(options = {}) {
     const provided = request.headers[headerName];
 
     if (Array.isArray(provided)) {
-      return provided.includes(settings.adminToken);
+      return provided.some((value) => matchesAdminToken(value));
     }
 
-    return provided === settings.adminToken;
+    return matchesAdminToken(provided);
+  }
+
+  function matchesAdminToken(value) {
+    if (typeof value !== 'string') {
+      return false;
+    }
+
+    // Compare in constant time so a wrong token leaks nothing about how much of it matched.
+    const provided = Buffer.from(value);
+    const expected = Buffer.from(settings.adminToken);
+    return provided.length === expected.length && timingSafeEqual(provided, expected);
   }
 
   function sendAdminUnauthorized(request, response) {
