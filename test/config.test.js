@@ -77,16 +77,18 @@ test('sanitizeAppState keeps a non-negative telegram offset', () => {
 });
 
 test('getAppStatePath defaults next to the config file', () => {
-  const result = getAppStatePath({}, '/tmp/rednote-data', '/tmp/rednote-data/.rednote-config.json');
-  assert.equal(result, '/tmp/rednote-data/.rednote-state.json');
+  const dataDir = path.resolve(path.sep, 'tmp', 'rednote-data');
+  const result = getAppStatePath({}, dataDir, path.join(dataDir, '.rednote-config.json'));
+  assert.equal(result, path.join(dataDir, '.rednote-state.json'));
 });
 
 test('getAppConfigPath honors explicit APP_CONFIG_PATH', () => {
+  const explicitPath = path.resolve(path.sep, 'srv', 'rednote', 'config', '.rednote-config.json');
   const result = getAppConfigPath({
-    APP_CONFIG_PATH: '/srv/rednote/config/.rednote-config.json',
-  }, '/tmp/rednote-data');
+    APP_CONFIG_PATH: explicitPath,
+  }, path.resolve(path.sep, 'tmp', 'rednote-data'));
 
-  assert.equal(result, '/srv/rednote/config/.rednote-config.json');
+  assert.equal(result, explicitPath);
 });
 
 test('migrateLegacyAppFiles copies legacy config and state into dedicated config dir', async () => {

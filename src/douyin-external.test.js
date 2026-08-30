@@ -18,27 +18,29 @@ test('detects external Douyin downloader REST configuration', () => {
 });
 
 test('builds external Douyin downloader config from environment', () => {
+  const outputDir = path.resolve(path.sep, 'tmp', 'douyin-output');
   const config = buildExternalDouyinConfig({
     DOUYIN_DOWNLOADER_BASE_URL: ' http://127.0.0.1:8000/ ',
-    DOUYIN_DOWNLOADER_OUTPUT_DIR: ' /tmp/douyin-output ',
+    DOUYIN_DOWNLOADER_OUTPUT_DIR: ` ${outputDir} `,
     DOUYIN_DOWNLOADER_POLL_INTERVAL_MS: '25',
     DOUYIN_DOWNLOADER_TIMEOUT_MS: '5000',
   });
 
   assert.equal(config.baseUrl, 'http://127.0.0.1:8000');
-  assert.equal(config.outputDir, '/tmp/douyin-output');
+  assert.equal(config.outputDir, outputDir);
   assert.equal(config.pollIntervalMs, 25);
   assert.equal(config.timeoutMs, 5000);
 });
 
 test('builds internal Douyin downloader defaults when bundled mode is enabled', () => {
+  const downloadDir = path.resolve(path.sep, 'data', 'downloads');
   const config = buildExternalDouyinConfig({
-    DOWNLOAD_DIR: '/data/downloads',
+    DOWNLOAD_DIR: downloadDir,
     DOUYIN_INTERNAL_DOWNLOADER_ENABLED: 'true',
   });
 
   assert.equal(config.baseUrl, 'http://127.0.0.1:8000');
-  assert.equal(config.outputDir, '/data/downloads/douyin');
+  assert.equal(config.outputDir, path.join(downloadDir, 'douyin'));
 });
 
 test('does not configure bundled Douyin downloader when disabled', () => {
@@ -52,15 +54,16 @@ test('does not configure bundled Douyin downloader when disabled', () => {
 });
 
 test('prefers explicit external Douyin downloader settings over bundled defaults', () => {
+  const outputDir = path.resolve(path.sep, 'mnt', 'douyin');
   const config = buildExternalDouyinConfig({
-    DOWNLOAD_DIR: '/data/downloads',
+    DOWNLOAD_DIR: path.resolve(path.sep, 'data', 'downloads'),
     DOUYIN_INTERNAL_DOWNLOADER_ENABLED: 'true',
     DOUYIN_DOWNLOADER_BASE_URL: 'http://192.168.1.10:8000',
-    DOUYIN_DOWNLOADER_OUTPUT_DIR: '/mnt/douyin',
+    DOUYIN_DOWNLOADER_OUTPUT_DIR: outputDir,
   });
 
   assert.equal(config.baseUrl, 'http://192.168.1.10:8000');
-  assert.equal(config.outputDir, '/mnt/douyin');
+  assert.equal(config.outputDir, outputDir);
 });
 
 test('reads the latest downloaded Douyin media from manifest', async () => {
