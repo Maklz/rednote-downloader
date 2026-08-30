@@ -38,6 +38,9 @@ const MEDIA_HOST_SUFFIXES = [
   '.bytedanceapi.com',
 ];
 
+const MEDIA_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_MEDIA_REDIRECTS = 8;
+
 const DEFAULT_TIMEOUT_MS = Number.parseInt(process.env.REQUEST_TIMEOUT_MS || '15000', 10);
 const DEFAULT_MEDIA_TIMEOUT_MS = Number.parseInt(process.env.MEDIA_REQUEST_TIMEOUT_MS || '30000', 10);
 const DEFAULT_TWITTER_TIMEOUT_MS = Number.parseInt(process.env.TWITTER_REQUEST_TIMEOUT_MS || '30000', 10);
@@ -776,38 +779,66 @@ export async function fetchMediaResponse(input, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_MEDIA_TIMEOUT_MS;
   const extraHeaders = options.headers && typeof options.headers === 'object' ? options.headers : {};
   const url = ensureAllowedMediaUrl(input);
-  const cookie = typeof options.cookie === 'string'
-    ? options.cookie
-    : options.useDefaultCookie === false || isDouyinMediaHost(url.hostname)
-      ? ''
-      : process.env.XHS_COOKIE;
-  const controller = new AbortController();
-  const timeoutHandle = setTimeout(() => {
-    controller.abort(new Error(`Media request timed out after ${timeoutMs}ms`));
-  }, timeoutMs);
+  let current = url;
 
-  let response;
-  try {
-    response = await fetch(url, {
-      headers: {
-        ...buildHeaders(url, cookie),
-        ...extraHeaders,
-      },
-      redirect: 'follow',
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeoutHandle);
+  for (let hop = 0; hop <= MAX_MEDIA_REDIRECTS; hop += 1) {
+    // Rebuilt per hop: buildHeaders picks Referer, Origin and the cookie by host.
+    const cookie = typeof options.cookie === 'string'
+      ? options.cookie
+      : options.useDefaultCookie === false || isDouyinMediaHost(current.hostname)
+        ? ''
+        : process.env.XHS_COOKIE;
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => {
+      controller.abort(new Error(`Media request timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    let response;
+    try {
+      response = await fetch(current, {
+        headers: {
+          ...buildHeaders(current, cookie),
+          ...extraHeaders,
+        },
+        // Followed by hand so the host allowlist is re-checked on every hop.
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+
+    if (MEDIA_REDIRECT_STATUSES.has(response.status)) {
+      const location = response.headers.get('location');
+      if (!location) {
+        throw new Error(`Redirect without location from ${current}`);
+      }
+
+      const next = new URL(location, current);
+      if (!isAllowedMediaHost(next.hostname)) {
+        throw new Error(
+          `Media redirect left the allowed hosts: ${current.hostname} -> ${next.hostname}. `
+            + 'If that host is legitimate, add its suffix to MEDIA_HOST_SUFFIXES in src/xhs.js.',
+        );
+      }
+
+      current = next;
+      continue;
+    }
+
+    if (!response.ok || !response.body) {
+      throw new Error(`Failed to download media: ${response.status} ${current}`);
+    }
+
+    // Callers derive the download file name from this, so keep reporting the
+    // URL that was asked for rather than the last hop.
+    return {
+      url,
+      response,
+    };
   }
 
-  if (!response.ok || !response.body) {
-    throw new Error(`Failed to download media: ${response.status} ${url}`);
-  }
-
-  return {
-    url,
-    response,
-  };
+  throw new Error(`Too many media redirects (>${MAX_MEDIA_REDIRECTS}) starting at ${url}`);
 }
 
 export async function downloadMedia(media, noteTitle, noteId, downloadDir, options = {}) {

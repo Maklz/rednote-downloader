@@ -375,6 +375,105 @@ test('ensureAllowedMediaUrl accepts twitter media hosts', () => {
   assert.doesNotThrow(() => ensureAllowedMediaUrl('https://video.twimg.com/amplify_video/demo/vid/avc1/720x1280/high.mp4?tag=21'));
 });
 
+test('fetchMediaResponse follows a redirect between allowed media hosts', async () => {
+  const originalFetch = global.fetch;
+  const requested = [];
+
+  global.fetch = async (url) => {
+    requested.push(String(url));
+
+    if (String(url).includes('sns-img.xhscdn.com')) {
+      return new Response(null, {
+        status: 302,
+        headers: { Location: 'https://ci.xiaohongshu.com/final.jpg' },
+      });
+    }
+
+    return new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: { 'Content-Type': 'image/jpeg' },
+    });
+  };
+
+  try {
+    const result = await fetchMediaResponse('https://sns-img.xhscdn.com/start.jpg');
+
+    assert.deepEqual(requested, [
+      'https://sns-img.xhscdn.com/start.jpg',
+      'https://ci.xiaohongshu.com/final.jpg',
+    ]);
+    assert.equal((await result.response.arrayBuffer()).byteLength, 3);
+    // The reported URL stays the requested one so file names do not shift.
+    assert.equal(result.url.toString(), 'https://sns-img.xhscdn.com/start.jpg');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('fetchMediaResponse refuses a redirect that leaves the allowed hosts', async () => {
+  const originalFetch = global.fetch;
+  const requested = [];
+
+  global.fetch = async (url) => {
+    requested.push(String(url));
+
+    return new Response(null, {
+      status: 302,
+      headers: { Location: 'http://169.254.169.254/latest/meta-data/' },
+    });
+  };
+
+  try {
+    await assert.rejects(
+      fetchMediaResponse('https://ci.xiaohongshu.com/demo.jpg'),
+      /Media redirect left the allowed hosts: ci.xiaohongshu.com -> 169.254.169.254/,
+    );
+
+    // The internal address must never be requested at all.
+    assert.deepEqual(requested, ['https://ci.xiaohongshu.com/demo.jpg']);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('fetchMediaResponse gives up on an endless redirect chain', async () => {
+  const originalFetch = global.fetch;
+  let hops = 0;
+
+  global.fetch = async () => {
+    hops += 1;
+    return new Response(null, {
+      status: 302,
+      headers: { Location: `https://ci.xiaohongshu.com/hop-${hops}.jpg` },
+    });
+  };
+
+  try {
+    await assert.rejects(
+      fetchMediaResponse('https://ci.xiaohongshu.com/start.jpg'),
+      /Too many media redirects/,
+    );
+    assert.equal(hops, 9);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('fetchMediaResponse does not mistake a 304 for a redirect', async () => {
+  const originalFetch = global.fetch;
+
+  global.fetch = async () => new Response(null, { status: 304 });
+
+  try {
+    await assert.rejects(
+      fetchMediaResponse('https://ci.xiaohongshu.com/demo.jpg'),
+      /Failed to download media: 304/,
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('fetchMediaResponse only applies timeout until headers arrive', async () => {
   const originalFetch = global.fetch;
   let capturedSignal;
