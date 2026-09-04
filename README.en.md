@@ -101,6 +101,9 @@ DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
 - `TELEGRAM_DELIVERY_MODE`: `document` or `preview`.
 - `REDNOTE_ADMIN_TOKEN`: optional admin token required by protected management endpoints.
 - `CORS_ALLOWED_ORIGINS`: optional comma-separated list of extra allowed origins.
+  Behind a reverse proxy the public origin must be listed here: `X-Forwarded-Host`
+  and `X-Forwarded-Proto` are ignored when deciding whether a request is same-origin,
+  because on a directly reachable port anyone can set them.
 
 ## Documentation
 

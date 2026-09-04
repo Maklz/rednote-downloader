@@ -213,6 +213,8 @@ Telegram 轮询状态路径：
 - `MEDIA_REQUEST_TIMEOUT_MS`: 可选，媒体请求首包超时，默认 `30000`。
 - `REDNOTE_ADMIN_TOKEN`: 可选，设置后管理接口需要 `X-Admin-Token`。
 - `CORS_ALLOWED_ORIGINS`: 可选，额外允许跨域访问管理接口的 Origin，逗号分隔。
+  反向代理部署需要在此列出对外 Origin：判断同源时会忽略 `X-Forwarded-Host` 与
+  `X-Forwarded-Proto`，因为端口可直连时任何人都能伪造这两个头。
 
 ## GitHub Actions Auto Publish
 

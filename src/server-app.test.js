@@ -620,3 +620,34 @@ test('POST aborts a request body over the size limit', async (t) => {
     body: JSON.stringify({ input: 'x'.repeat(1024 * 1024 + 64) }),
   }));
 });
+
+test('CORS does not treat a forged X-Forwarded-Host as same origin', async (t) => {
+  const { origin } = await startTestApp(t);
+
+  const forged = await fetch(`${origin}/api/config`, {
+    headers: {
+      Origin: 'https://evil.example',
+      'X-Forwarded-Host': 'evil.example',
+      'X-Forwarded-Proto': 'https',
+    },
+  });
+
+  assert.equal(forged.status, 200);
+  assert.equal(forged.headers.get('access-control-allow-origin'), null);
+});
+
+test('CORS still allows the real same origin and configured extra origins', async (t) => {
+  const { origin } = await startTestApp(t, {
+    corsAllowedOrigins: ['https://rednote.example'],
+  });
+
+  const sameOrigin = await fetch(`${origin}/api/config`, {
+    headers: { Origin: origin },
+  });
+  assert.equal(sameOrigin.headers.get('access-control-allow-origin'), origin);
+
+  const configured = await fetch(`${origin}/api/config`, {
+    headers: { Origin: 'https://rednote.example' },
+  });
+  assert.equal(configured.headers.get('access-control-allow-origin'), 'https://rednote.example');
+});

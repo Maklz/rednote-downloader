@@ -169,6 +169,16 @@ function getRequestOrigin(request, fallbackPort) {
   return `${protocol}://${host}`.replace(/\/$/, '');
 }
 
+// Deliberately ignores X-Forwarded-*: on a directly reachable port those are
+// attacker-controlled, and letting them define "same origin" hands out
+// Access-Control-Allow-Origin to any site that asks for it. Deployments behind
+// a TLS-terminating proxy list their public origin in CORS_ALLOWED_ORIGINS.
+function getObservedOrigin(request, fallbackPort) {
+  const protocol = request.socket.encrypted ? 'https' : 'http';
+  const host = request.headers.host || `127.0.0.1:${fallbackPort}`;
+  return `${protocol}://${host}`.replace(/\/$/, '');
+}
+
 async function probeJsonEndpoint(url) {
   try {
     const response = await fetch(url, {
@@ -342,7 +352,7 @@ export async function createRednoteApp(options = {}) {
       return {};
     }
 
-    const requestOrigin = normalizeOrigin(getRequestOrigin(request, settings.port));
+    const requestOrigin = normalizeOrigin(getObservedOrigin(request, settings.port));
     if (origin !== requestOrigin && !settings.corsAllowedOrigins.has(origin)) {
       return {};
     }
