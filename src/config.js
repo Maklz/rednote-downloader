@@ -224,7 +224,14 @@ export async function migrateLegacyDownloadEntries(downloadDir) {
 
   const entries = await readdir(legacyRootDir, { withFileTypes: true });
   for (const entry of entries) {
-    if (reservedNames.has(entry.name) || !looksLikeLegacyDownloadEntry(entry.name)) {
+    // Only ever folders. A legacy entry is a per-note download directory, and
+    // legacyRootDir is just the parent of downloadDir -- pointing DOWNLOAD_DIR
+    // at a directory inside a real project makes that parent someone's working
+    // tree, where the loose name match would otherwise swallow ordinary files
+    // (DOCKER_HUB_README.md ends in _README, so it matched).
+    if (!entry.isDirectory()
+      || reservedNames.has(entry.name)
+      || !looksLikeLegacyDownloadEntry(entry.name)) {
       continue;
     }
 

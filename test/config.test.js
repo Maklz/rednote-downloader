@@ -182,3 +182,20 @@ test('normalizeEnvBoolean understands common truthy and falsy strings', () => {
   assert.equal(normalizeEnvBoolean('', true), true);
   assert.equal(normalizeEnvBoolean('unexpected', false), false);
 });
+
+test('migrateLegacyDownloadEntries leaves plain files next to the download dir alone', async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'rednote-download-files-'));
+  const downloadDir = path.join(tempRoot, 'data');
+
+  // Names that match the legacy pattern but are ordinary files, which is what
+  // the parent of downloadDir looks like when DOWNLOAD_DIR points into a repo.
+  await writeFile(path.join(tempRoot, 'DOCKER_HUB_README.md'), 'docs\n', 'utf8');
+  await writeFile(path.join(tempRoot, 'notes_abcdef.txt'), 'text\n', 'utf8');
+  await mkdir(path.join(tempRoot, 'X @user_9_2031161811874324962'), { recursive: true });
+
+  const moved = await migrateLegacyDownloadEntries(downloadDir);
+
+  assert.deepEqual(moved, ['X @user_9_2031161811874324962']);
+  assert.equal(await readFile(path.join(tempRoot, 'DOCKER_HUB_README.md'), 'utf8'), 'docs\n');
+  assert.equal(await readFile(path.join(tempRoot, 'notes_abcdef.txt'), 'utf8'), 'text\n');
+});
