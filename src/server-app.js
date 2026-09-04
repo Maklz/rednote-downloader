@@ -34,6 +34,7 @@ import {
 } from './config.js';
 
 const DEFAULT_ADMIN_HEADER_NAME = 'X-Admin-Token';
+const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
 const ADMIN_PATHS = new Set([
   '/api/config',
   '/api/telegram/status',
@@ -128,24 +129,30 @@ function isPathInside(candidate, root) {
 
 function readJsonBody(request) {
   return new Promise((resolve, reject) => {
-    let raw = '';
+    // Buffered as bytes, not appended as strings: a multi-byte character split
+    // across two chunks would otherwise decode into replacement characters.
+    const chunks = [];
+    let size = 0;
 
     request.on('data', (chunk) => {
-      raw += chunk;
-      if (raw.length > 1024 * 1024) {
+      size += chunk.length;
+      if (size > MAX_REQUEST_BODY_BYTES) {
         reject(new Error('Request body too large'));
         request.destroy();
+        return;
       }
+
+      chunks.push(chunk);
     });
 
     request.on('end', () => {
-      if (!raw) {
+      if (!size) {
         resolve({});
         return;
       }
 
       try {
-        resolve(JSON.parse(raw));
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
       } catch {
         reject(new Error('Request body must be valid JSON'));
       }

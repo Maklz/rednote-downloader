@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import net from 'node:net';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { test } from 'node:test';
 
@@ -539,4 +540,83 @@ test('GET /api/media rejects local files outside allowed roots', async (t) => {
   assert.equal(response.status, 502);
   const data = await response.json();
   assert.match(data.error, /Unsupported local media path/);
+});
+
+// Sends one request body as two TCP writes, splitting it at an exact byte
+// offset. HTTP/1.0 keeps the reply out of chunked transfer encoding so the
+// response body can be read straight off the socket.
+function postSplitBody(origin, pathname, payload, splitAt) {
+  const body = Buffer.from(payload, 'utf8');
+  const { hostname, port } = new URL(origin);
+  const CRLF = '\r\n';
+
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(Number(port), hostname, () => {
+      socket.write([
+        `POST ${pathname} HTTP/1.0`,
+        `Host: ${hostname}:${port}`,
+        'Content-Type: application/json',
+        `Content-Length: ${body.length}`,
+        'Connection: close',
+        '',
+        '',
+      ].join(CRLF));
+      socket.write(body.subarray(0, splitAt));
+      // Let the first part land as its own 'data' event before sending the rest.
+      setTimeout(() => socket.write(body.subarray(splitAt)), 50);
+    });
+
+    const received = [];
+    socket.on('data', (chunk) => received.push(chunk));
+    socket.on('error', reject);
+    socket.on('end', () => {
+      const raw = Buffer.concat(received).toString('utf8');
+      const separator = raw.indexOf(CRLF + CRLF);
+      if (separator < 0) {
+        reject(new Error(`No header separator in response: ${raw.slice(0, 120)}`));
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(raw.slice(separator + 4)));
+      } catch (error) {
+        reject(new Error(`${error.message} — body was: ${raw.slice(separator + 4, separator + 140)}`));
+      }
+    });
+  });
+}
+
+test('POST bodies survive a multi-byte character split across TCP chunks', async (t) => {
+  const { origin } = await startTestApp(t);
+
+  // Two URLs so the resolve handler answers in batch mode and echoes each input
+  // back; both hosts are unsupported, so nothing leaves the process.
+  const title = '小红书笔记标题';
+  const payload = JSON.stringify({
+    input: `https://example.com/${title}/a https://example.com/${title}/b`,
+  });
+
+  const body = Buffer.from(payload, 'utf8');
+  const splitAt = body.indexOf(Buffer.from('小', 'utf8')) + 1;
+  assert.ok(splitAt > 0, 'expected the payload to contain the multi-byte title');
+
+  const data = await postSplitBody(origin, '/api/resolve', payload, splitAt);
+
+  assert.equal(data.batch, true);
+  assert.equal(data.results.length, 2);
+  assert.equal(data.results[0].input, `https://example.com/${title}/a`);
+  assert.equal(data.results[1].input, `https://example.com/${title}/b`);
+  assert.ok(!JSON.stringify(data).includes('\uFFFD'), 'decoded without replacement characters');
+});
+
+test('POST aborts a request body over the size limit', async (t) => {
+  const { origin } = await startTestApp(t);
+
+  // readJsonBody destroys the socket as soon as the cap is passed, so the
+  // client sees the connection drop rather than an HTTP error response.
+  await assert.rejects(fetch(`${origin}/api/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ input: 'x'.repeat(1024 * 1024 + 64) }),
+  }));
 });
