@@ -459,6 +459,16 @@ export async function createRednoteApp(options = {}) {
     });
   }
 
+  async function persistLastPublication(record) {
+    appState = await saveAppState(settings.appStatePath, {
+      ...appState,
+      telegram: {
+        ...appState.telegram,
+        lastPublication: record,
+      },
+    });
+  }
+
   async function persistPublishedNoteIds(noteIds) {
     appState = await saveAppState(settings.appStatePath, {
       ...appState,
@@ -486,6 +496,8 @@ export async function createRednoteApp(options = {}) {
         onOffsetChange: persistTelegramOffset,
         initialPublishedNoteIds: appState.telegram.publishedNoteIds,
         onPublishedNoteIdsChange: persistPublishedNoteIds,
+        initialLastPublication: appState.telegram.lastPublication,
+        onLastPublicationChange: persistLastPublication,
       });
       void telegramBot.start();
     }

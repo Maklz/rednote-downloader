@@ -15,6 +15,7 @@ export const DEFAULT_APP_STATE = {
   telegram: {
     updateOffset: 0,
     publishedNoteIds: [],
+    lastPublication: null,
   },
 };
 
@@ -285,8 +286,29 @@ export function sanitizeAppState(input = {}) {
         DEFAULT_APP_STATE.telegram.updateOffset,
       ),
       publishedNoteIds: normalizePublishedNoteIds(telegram.publishedNoteIds),
+      lastPublication: normalizeLastPublication(telegram.lastPublication),
     },
   };
+}
+
+// What /undo needs to take a post back: which chat, which messages, and which
+// history entry to release so the note can be published again.
+function normalizeLastPublication(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const chatId = normalizeString(value.chatId);
+  const noteId = normalizeString(value.noteId);
+  const messageIds = Array.isArray(value.messageIds)
+    ? value.messageIds.filter((id) => Number.isInteger(id) && id > 0)
+    : [];
+
+  if (!chatId || !messageIds.length) {
+    return null;
+  }
+
+  return { chatId, noteId, messageIds };
 }
 
 function normalizePublishedNoteIds(value) {

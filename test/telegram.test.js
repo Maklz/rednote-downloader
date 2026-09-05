@@ -1130,3 +1130,168 @@ test('direct replies still group pictures into one album', async () => {
   assert.equal(calls[0].method, 'sendMediaGroup');
   assert.equal(calls[0].count, 3);
 });
+
+// Publishes a two-picture note to a channel, then hands back the runner and a
+// log of every Telegram call, so a follow-up /undo can be inspected.
+async function publishThenInspect() {
+  const originalFetch = global.fetch;
+  const calls = [];
+  const savedRecords = [];
+  let nextMessageId = 500;
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+
+    if (target.includes('/sendChatAction')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('api.fxtwitter.com/demo/status/1')) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          tweet: {
+            id: '1',
+            url: 'https://x.com/demo/status/1',
+            text: '示例推文正文',
+            author: { id: 'user-1', name: 'Demo User', screen_name: 'demo' },
+            media: {
+              all: [
+                { type: 'photo', url: 'https://pbs.twimg.com/media/a.jpg' },
+                { type: 'photo', url: 'https://pbs.twimg.com/media/b.jpg' },
+              ],
+            },
+          },
+        }),
+      };
+    }
+
+    if (target.includes('twimg.com')) {
+      return new Response(new Uint8Array([1]), {
+        status: 200,
+        headers: { 'Content-Type': 'image/jpeg' },
+      });
+    }
+
+    if (target.includes('/sendPhoto')) {
+      nextMessageId += 1;
+      calls.push({ method: 'sendPhoto', messageId: nextMessageId });
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: nextMessageId } }) };
+    }
+
+    if (target.includes('/deleteMessage')) {
+      const body = JSON.parse(init.body);
+      calls.push({ method: 'deleteMessage', chatId: String(body.chat_id), messageId: body.message_id });
+      return { ok: true, json: async () => ({ ok: true, result: true }) };
+    }
+
+    if (target.includes('/sendMessage')) {
+      const body = JSON.parse(init.body);
+      calls.push({ method: 'sendMessage', text: body.text });
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  const runner = new TelegramBotRunner({
+    token: 'demo-token',
+    allowedChatIds: new Set(),
+    deliveryMode: 'preview',
+    targetChatId: '-100999',
+    onLastPublicationChange: async (record) => { savedRecords.push(record); },
+  });
+
+  await runner.handleMessage({ chat: { id: 1 }, text: 'https://x.com/demo/status/1', message_id: 1 });
+
+  return { runner, calls, savedRecords, restore: () => { global.fetch = originalFetch; } };
+}
+
+test('/undo deletes the posted messages and frees the note', async () => {
+  const { runner, calls, savedRecords, restore } = await publishThenInspect();
+
+  try {
+    const published = calls.filter((call) => call.method === 'sendPhoto');
+    assert.equal(published.length, 2);
+    assert.deepEqual(runner.lastPublication.messageIds, published.map((call) => call.messageId));
+    assert.equal(runner.publishedNoteIds.length, 1);
+
+    await runner.handleMessage({ chat: { id: 1 }, text: '/undo', message_id: 2 });
+
+    const deletions = calls.filter((call) => call.method === 'deleteMessage');
+    assert.equal(deletions.length, 2, 'both pictures are removed, not just the first');
+    assert.ok(deletions.every((call) => call.chatId === '-100999'));
+
+    // The note is released, so it can be published again.
+    assert.equal(runner.publishedNoteIds.length, 0);
+    assert.equal(runner.lastPublication, null);
+    assert.equal(savedRecords.at(-1), null, 'the cleared record is persisted too');
+
+    assert.match(calls.at(-1).text, /已从频道撤回 2 条消息/);
+  } finally {
+    restore();
+  }
+});
+
+test('/undo says so when there is nothing to take back', async () => {
+  const originalFetch = global.fetch;
+  const sent = [];
+
+  global.fetch = async (url, init = {}) => {
+    if (String(url).includes('/sendMessage')) {
+      sent.push(JSON.parse(init.body).text);
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      targetChatId: '-100999',
+    });
+
+    await runner.handleMessage({ chat: { id: 1 }, text: '/undo', message_id: 1 });
+    assert.match(sent[0], /没有可撤回的发布/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('/undo reports a deletion Telegram refuses and keeps the record', async () => {
+  const originalFetch = global.fetch;
+  const sent = [];
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+    if (target.includes('/deleteMessage')) {
+      throw new Error("message can't be deleted");
+    }
+    if (target.includes('/sendMessage')) {
+      sent.push(JSON.parse(init.body).text);
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      targetChatId: '-100999',
+      initialPublishedNoteIds: ['note-1'],
+      initialLastPublication: { chatId: '-100999', noteId: 'note-1', messageIds: [501] },
+    });
+
+    await runner.handleMessage({ chat: { id: 1 }, text: '/undo', message_id: 1 });
+
+    assert.match(sent[0], /撤回失败/);
+    // Nothing was actually removed, so the history must not be rewritten.
+    assert.deepEqual(runner.publishedNoteIds, ['note-1']);
+    assert.ok(runner.lastPublication, 'the record survives so /undo can be retried');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

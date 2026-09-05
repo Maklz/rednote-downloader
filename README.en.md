@@ -107,7 +107,9 @@ DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
   caption. Each note is published once; prefix the message with `/again` to publish
   it again, which is how you add the caption you forgot. A gallery becomes one
   channel post per picture rather than a single album, and the caption goes on the
-  first of them. The bot must be an
+  first of them. `/list` shows what the channel already has and `/undo` takes the
+  last publication back, deleting its messages and freeing the note to be published
+  again. The bot must be an
   administrator of the channel.
 - `REDNOTE_ADMIN_TOKEN`: optional admin token required by protected management endpoints.
 - `CORS_ALLOWED_ORIGINS`: optional comma-separated list of extra allowed origins.

@@ -264,6 +264,13 @@ async function sendText(token, chatId, text, replyToMessageId) {
   });
 }
 
+async function deleteMessage(token, chatId, messageId) {
+  return telegramRequest(token, 'deleteMessage', {
+    chat_id: chatId,
+    message_id: messageId,
+  });
+}
+
 async function sendChatAction(token, chatId, action) {
   return telegramRequest(token, 'sendChatAction', {
     chat_id: chatId,
@@ -343,7 +350,16 @@ async function uploadMediaGroup(token, chatId, note, items, startIndex, options 
 
 async function sendTelegramOversizeFallback(token, chatId, item, note, index, options = {}) {
   const text = buildTelegramOversizeFallbackText(item, note, index, options.caption);
-  await sendText(token, chatId, text, options.replyToMessageId);
+  return sendText(token, chatId, text, options.replyToMessageId);
+}
+
+// Telegram answers with a Message for a single send and an array of them for a
+// media group, so both shapes are flattened to the ids the caller cares about.
+function collectMessageIds(result) {
+  const messages = Array.isArray(result) ? result : [result];
+  return messages
+    .map((entry) => entry?.message_id)
+    .filter((id) => Number.isInteger(id));
 }
 
 async function sendResolvedMediaItem(token, chatId, item, note, index, options = {}) {
@@ -353,24 +369,27 @@ async function sendResolvedMediaItem(token, chatId, item, note, index, options =
     if (deliveryMode === 'preview') {
       const method = item.type === 'video' ? 'sendVideo' : 'sendPhoto';
       const fieldName = item.type === 'video' ? 'video' : 'photo';
-      await uploadMediaAsTelegramFile(token, method, fieldName, chatId, item, note, index, {
-        replyToMessageId: options.replyToMessageId,
-        caption: options.caption,
-      });
-      return;
+      return collectMessageIds(
+        await uploadMediaAsTelegramFile(token, method, fieldName, chatId, item, note, index, {
+          replyToMessageId: options.replyToMessageId,
+          caption: options.caption,
+        }),
+      );
     }
 
-    await uploadMediaAsTelegramFile(token, 'sendDocument', 'document', chatId, item, note, index, {
-      replyToMessageId: options.replyToMessageId,
-      caption: options.caption,
-    });
+    return collectMessageIds(
+      await uploadMediaAsTelegramFile(token, 'sendDocument', 'document', chatId, item, note, index, {
+        replyToMessageId: options.replyToMessageId,
+        caption: options.caption,
+      }),
+    );
   } catch (error) {
     if (!isTelegramEntityTooLargeError(error)) {
       throw error;
     }
 
     console.warn('[telegram] media upload exceeded Telegram size limit, sending fallback links:', error.message);
-    await sendTelegramOversizeFallback(token, chatId, item, note, index, options);
+    return collectMessageIds(await sendTelegramOversizeFallback(token, chatId, item, note, index, options));
   }
 }
 
@@ -378,13 +397,17 @@ async function sendResolvedMediaSequential(token, chatId, note, options = {}) {
   const deliveryMode = options.deliveryMode || 'document';
   const caption = options.caption === undefined ? buildTelegramCaption(note) : options.caption;
 
+  const messageIds = [];
+
   for (const [index, item] of note.media.entries()) {
-    await sendResolvedMediaItem(token, chatId, item, note, index, {
+    messageIds.push(...await sendResolvedMediaItem(token, chatId, item, note, index, {
       deliveryMode,
       replyToMessageId: index === 0 ? options.replyToMessageId : undefined,
       caption: index === 0 ? caption : undefined,
-    });
+    }));
   }
+
+  return messageIds;
 }
 
 async function sendResolvedMedia(token, chatId, note, options = {}) {
@@ -392,41 +415,43 @@ async function sendResolvedMedia(token, chatId, note, options = {}) {
   const caption = options.caption === undefined ? buildTelegramCaption(note) : options.caption;
 
   if (!media.length) {
-    await sendText(token, chatId, caption, options.replyToMessageId);
-    return;
+    return collectMessageIds(await sendText(token, chatId, caption, options.replyToMessageId));
   }
 
   if (media.length === 1) {
     const [item] = media;
-    await sendResolvedMediaItem(token, chatId, item, note, 0, {
+    return sendResolvedMediaItem(token, chatId, item, note, 0, {
       deliveryMode: options.deliveryMode,
       replyToMessageId: options.replyToMessageId,
       caption,
     });
-    return;
   }
 
   // A channel wants one post per picture, not a single album the reader has to
   // open to page through. Direct replies keep grouping, which is tidier in a
   // one-to-one chat.
   if (options.separateItems) {
-    await sendResolvedMediaSequential(token, chatId, note, { ...options, caption });
-    return;
+    return sendResolvedMediaSequential(token, chatId, note, { ...options, caption });
   }
 
   try {
     const chunks = chunkTelegramMedia(media);
+    const messageIds = [];
 
     for (const [chunkIndex, chunk] of chunks.entries()) {
-      await uploadMediaGroup(token, chatId, note, chunk, chunkIndex * TELEGRAM_MEDIA_GROUP_LIMIT, {
-        deliveryMode: options.deliveryMode,
-        replyToMessageId: chunkIndex === 0 ? options.replyToMessageId : undefined,
-        caption: chunkIndex === 0 ? caption : undefined,
-      });
+      messageIds.push(...collectMessageIds(
+        await uploadMediaGroup(token, chatId, note, chunk, chunkIndex * TELEGRAM_MEDIA_GROUP_LIMIT, {
+          deliveryMode: options.deliveryMode,
+          replyToMessageId: chunkIndex === 0 ? options.replyToMessageId : undefined,
+          caption: chunkIndex === 0 ? caption : undefined,
+        }),
+      ));
     }
+
+    return messageIds;
   } catch (error) {
     console.warn('[telegram] media group send failed, falling back to sequential uploads:', error instanceof Error ? error.message : error);
-    await sendResolvedMediaSequential(token, chatId, note, { ...options, caption });
+    return sendResolvedMediaSequential(token, chatId, note, { ...options, caption });
   }
 }
 
@@ -443,6 +468,7 @@ function buildHelpText() {
     '/again https://www.xiaohongshu.com/... * 补上的说明',
     '',
     '/list 可以看已经发布过哪些帖子。',
+    '/undo 撤回上一次发布，频道里的消息会被删掉，那条帖子也能重新发。',
     '',
     '如果你想保留原始文件质量，保持默认 document 模式就可以。',
   ].join('\n');
@@ -476,6 +502,10 @@ export class TelegramBotRunner {
       : [];
     this.onPublishedNoteIdsChange = typeof options.onPublishedNoteIdsChange === 'function'
       ? options.onPublishedNoteIdsChange
+      : null;
+    this.lastPublication = options.initialLastPublication || null;
+    this.onLastPublicationChange = typeof options.onLastPublicationChange === 'function'
+      ? options.onLastPublicationChange
       : null;
     this.running = false;
     this.loopPromise = null;
@@ -536,6 +566,11 @@ export class TelegramBotRunner {
       return;
     }
 
+    if (text === '/undo') {
+      await sendText(this.token, chatId, await this.undoLastPublication(), message.message_id);
+      return;
+    }
+
     const { force, text: requestText } = parseRepublishCommand(text);
     const { linkText, caption } = parsePublishRequest(requestText);
 
@@ -581,12 +616,17 @@ export class TelegramBotRunner {
       // which is recoverable, while the reverse silently loses it.
       // caption is passed explicitly, '' included: the channel gets the
       // sender's own words or nothing, never the original title and link.
-      await sendResolvedMedia(this.token, this.targetChatId, note, {
+      const messageIds = await sendResolvedMedia(this.token, this.targetChatId, note, {
         deliveryMode: this.deliveryMode,
         caption,
         separateItems: true,
       });
       await this.rememberPublishedNote(noteKey);
+      await this.rememberLastPublication({
+        chatId: String(this.targetChatId),
+        noteId: noteKey,
+        messageIds,
+      });
       await sendText(
         this.token,
         chatId,
@@ -597,6 +637,57 @@ export class TelegramBotRunner {
       const messageText = error instanceof Error ? error.message : 'Unknown error';
       await sendText(this.token, chatId, `解析失败：${messageText}`, message.message_id);
     }
+  }
+
+  async rememberLastPublication(record) {
+    this.lastPublication = record;
+
+    if (this.onLastPublicationChange) {
+      await this.onLastPublicationChange(record);
+    }
+  }
+
+  /**
+   * Takes back the most recent channel post: deletes its messages and releases
+   * the note from the published history so it can go out again. Telegram only
+   * lets a bot delete its own messages for 48 hours, so an older post reports
+   * what could not be removed instead of pretending it worked.
+   */
+  async undoLastPublication() {
+    const record = this.lastPublication;
+
+    if (!record?.messageIds?.length) {
+      return '没有可撤回的发布。';
+    }
+
+    const failures = [];
+
+    for (const messageId of record.messageIds) {
+      try {
+        await deleteMessage(this.token, record.chatId, messageId);
+      } catch (error) {
+        failures.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    if (failures.length === record.messageIds.length) {
+      return `撤回失败：${failures[0]}`;
+    }
+
+    if (record.noteId) {
+      this.publishedNoteIds = this.publishedNoteIds.filter((id) => id !== record.noteId);
+      if (this.onPublishedNoteIdsChange) {
+        await this.onPublishedNoteIdsChange(this.publishedNoteIds);
+      }
+    }
+
+    await this.rememberLastPublication(null);
+
+    if (failures.length) {
+      return `已撤回 ${record.messageIds.length - failures.length}/${record.messageIds.length} 条，其余删不掉：${failures[0]}`;
+    }
+
+    return `已从频道撤回 ${record.messageIds.length} 条消息，这条帖子可以重新发布了。`;
   }
 
   async rememberPublishedNote(noteKey) {
