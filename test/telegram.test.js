@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   TelegramBotRunner,
   buildPublishedNoteKey,
+  parsePublishRequest,
   buildTelegramCaption,
   chunkTelegramMedia,
   getTelegramMediaGroupType,
@@ -598,4 +599,158 @@ test('rememberPublishedNote caps history and persists it', async () => {
   assert.deepEqual(runner.publishedNoteIds, ['old', 'first', 'second']);
   assert.equal(saved.length, 2, 'a repeat must not be persisted twice');
   assert.deepEqual(saved.at(-1), ['old', 'first', 'second']);
+});
+
+test('parsePublishRequest splits the link from the caption at the first *', () => {
+  const withCaption = parsePublishRequest('https://www.xiaohongshu.com/explore/x * Моя подпись');
+  assert.equal(withCaption.linkText.trim(), 'https://www.xiaohongshu.com/explore/x');
+  assert.equal(withCaption.caption, 'Моя подпись');
+
+  const noCaption = parsePublishRequest('https://www.xiaohongshu.com/explore/x');
+  assert.equal(noCaption.caption, '', 'no star means no caption at all');
+  assert.equal(noCaption.linkText, 'https://www.xiaohongshu.com/explore/x');
+
+  // A share blob keeps working: the URL is found before the star.
+  const shareText = parsePublishRequest('看看这个 https://xhslink.com/abc 复制打开 * подпись');
+  assert.match(shareText.linkText, /xhslink\.com\/abc/);
+  assert.equal(shareText.caption, 'подпись');
+
+  // Only the first star separates; later ones belong to the caption.
+  assert.equal(parsePublishRequest('link * a * b').caption, 'a * b');
+
+  // A star with nothing after it is still no caption.
+  assert.equal(parsePublishRequest('link *   ').caption, '');
+});
+
+// Drives one message end to end and reports what reached Telegram's sendDocument.
+async function publishToChannel(messageText) {
+  const originalFetch = global.fetch;
+  const documents = [];
+  const messages = [];
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+
+    if (target.includes('/sendChatAction')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('api.fxtwitter.com/demo/status/1')) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          tweet: {
+            id: '1',
+            url: 'https://x.com/demo/status/1',
+            text: '示例推文正文',
+            author: { id: 'user-1', name: 'Demo User', screen_name: 'demo' },
+            media: { all: [{ type: 'video', url: 'https://video.twimg.com/demo/original.mp4' }] },
+          },
+        }),
+      };
+    }
+
+    if (target.includes('video.twimg.com')) {
+      return new Response(new Uint8Array([1, 2, 3, 4]), {
+        status: 200,
+        headers: { 'Content-Type': 'video/mp4' },
+      });
+    }
+
+    if (target.includes('/sendDocument')) {
+      documents.push({
+        chatId: String(init.body.get('chat_id')),
+        caption: init.body.get('caption'),
+      });
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('/sendMessage')) {
+      const body = JSON.parse(init.body);
+      messages.push({ chatId: String(body.chat_id), text: body.text });
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      deliveryMode: 'document',
+      targetChatId: '-1004376005872',
+    });
+
+    await runner.handleMessage({ chat: { id: 12345 }, text: messageText, message_id: 77 });
+    return { documents, messages };
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+test('a channel post carries the sender caption and none of the original text', async () => {
+  const { documents, messages } = await publishToChannel('https://x.com/demo/status/1 * Мой текст');
+
+  assert.equal(documents.length, 1);
+  assert.equal(documents[0].chatId, '-1004376005872');
+  assert.equal(documents[0].caption, 'Мой текст');
+
+  // The confirmation goes to the sender, not the channel.
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].chatId, '12345');
+});
+
+test('a channel post without a * carries no caption at all', async () => {
+  const { documents } = await publishToChannel('https://x.com/demo/status/1');
+
+  assert.equal(documents.length, 1);
+  assert.equal(documents[0].chatId, '-1004376005872');
+  // Not the note title, not the author, not the URL — nothing.
+  assert.equal(documents[0].caption, null);
+});
+
+test('replies to the sender still describe the note', async () => {
+  const originalFetch = global.fetch;
+  let captured;
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+    if (target.includes('/sendChatAction')) return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    if (target.includes('api.fxtwitter.com/demo/status/1')) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          tweet: {
+            id: '1',
+            url: 'https://x.com/demo/status/1',
+            text: '示例推文正文',
+            author: { id: 'user-1', name: 'Demo User', screen_name: 'demo' },
+            media: { all: [{ type: 'video', url: 'https://video.twimg.com/demo/original.mp4' }] },
+          },
+        }),
+      };
+    }
+    if (target.includes('video.twimg.com')) {
+      return new Response(new Uint8Array([1]), { status: 200, headers: { 'Content-Type': 'video/mp4' } });
+    }
+    if (target.includes('/sendDocument')) {
+      captured = init.body.get('caption');
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    // No targetChatId: the old reply-to-sender behaviour is untouched.
+    const runner = new TelegramBotRunner({ token: 'demo-token', allowedChatIds: new Set() });
+    await runner.handleMessage({ chat: { id: 12345 }, text: 'https://x.com/demo/status/1', message_id: 77 });
+
+    assert.match(captured, /示例推文正文/);
+    assert.match(captured, /x\.com\/demo\/status\/1/);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });

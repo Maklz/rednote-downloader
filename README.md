@@ -211,6 +211,10 @@ Telegram 轮询状态路径：
 - `MEDIA_DOWNLOAD_CONCURRENCY`: 可选，服务端下载同一帖子多媒体时的并发数，默认 `3`。
 - `MEDIA_DOWNLOAD_RETRY_COUNT`: 可选，同一候选直链重试次数，默认 `1`。
 - `MEDIA_REQUEST_TIMEOUT_MS`: 可选，媒体请求首包超时，默认 `30000`。
+- `TELEGRAM_TARGET_CHAT_ID`: 可选，发布目标频道或会话。设置后只把图片和视频发到该频道，
+  不带原帖标题、正文和链接，发送者只收到确认消息。想给频道帖子写说明，在链接后面加一个
+  `*` 再写文字：`https://www.xiaohongshu.com/... * 你的说明`。不加 `*` 就没有说明。
+  机器人需要是该频道的管理员。
 - `REDNOTE_ADMIN_TOKEN`: 可选，设置后管理接口需要 `X-Admin-Token`。
 - `CORS_ALLOWED_ORIGINS`: 可选，额外允许跨域访问管理接口的 Origin，逗号分隔。
   反向代理部署需要在此列出对外 Origin：判断同源时会忽略 `X-Forwarded-Host` 与

@@ -60,6 +60,27 @@ export function buildTelegramCaption(note) {
   return trimCaption(lines.join('\n\n'));
 }
 
+const CAPTION_SEPARATOR = '*';
+
+/**
+ * Splits an incoming message at the first '*': everything before it is searched
+ * for the post URL, everything after becomes the caption of the channel post.
+ * Without a '*' there is no caption -- the channel gets the media on its own.
+ */
+export function parsePublishRequest(text) {
+  const source = String(text || '');
+  const separatorIndex = source.indexOf(CAPTION_SEPARATOR);
+
+  if (separatorIndex < 0) {
+    return { linkText: source, caption: '' };
+  }
+
+  return {
+    linkText: source.slice(0, separatorIndex),
+    caption: trimCaption(source.slice(separatorIndex + 1)),
+  };
+}
+
 export function inferTelegramFileName(item, note, index) {
   return inferMediaFileName(item, note, index, {
     totalItems: Array.isArray(note?.media) ? note.media.length : 1,
@@ -280,7 +301,7 @@ async function sendResolvedMediaItem(token, chatId, item, note, index, options =
 
 async function sendResolvedMediaSequential(token, chatId, note, options = {}) {
   const deliveryMode = options.deliveryMode || 'document';
-  const caption = buildTelegramCaption(note);
+  const caption = options.caption === undefined ? buildTelegramCaption(note) : options.caption;
 
   for (const [index, item] of note.media.entries()) {
     await sendResolvedMediaItem(token, chatId, item, note, index, {
@@ -293,7 +314,7 @@ async function sendResolvedMediaSequential(token, chatId, note, options = {}) {
 
 async function sendResolvedMedia(token, chatId, note, options = {}) {
   const media = Array.isArray(note?.media) ? note.media : [];
-  const caption = buildTelegramCaption(note);
+  const caption = options.caption === undefined ? buildTelegramCaption(note) : options.caption;
 
   if (!media.length) {
     await sendText(token, chatId, caption, options.replyToMessageId);
@@ -322,7 +343,7 @@ async function sendResolvedMedia(token, chatId, note, options = {}) {
     }
   } catch (error) {
     console.warn('[telegram] media group send failed, falling back to sequential uploads:', error instanceof Error ? error.message : error);
-    await sendResolvedMediaSequential(token, chatId, note, options);
+    await sendResolvedMediaSequential(token, chatId, note, { ...options, caption });
   }
 }
 
@@ -330,6 +351,11 @@ function buildHelpText() {
   return [
     '把小红书链接、x.com/twitter.com 链接，或整段分享文案直接发给我。',
     '我会解析帖子并把图片/视频直接回到 Telegram。',
+    '',
+    '发布到频道时只发图片和视频，不带原帖标题、正文和链接。',
+    '想给频道里的帖子写说明，就在链接后面加一个 * 再写你的文字：',
+    'https://www.xiaohongshu.com/... * 这里是你的说明',
+    '',
     '如果你想保留原始文件质量，保持默认 document 模式就可以。',
   ].join('\n');
 }
@@ -417,9 +443,11 @@ export class TelegramBotRunner {
       return;
     }
 
+    const { linkText, caption } = parsePublishRequest(text);
+
     let input;
     try {
-      input = extractFirstUrl(text);
+      input = extractFirstUrl(linkText);
     } catch {
       await sendText(this.token, chatId, '请直接发送小红书链接、x.com/twitter.com 链接，或者包含这些链接的整段分享文案。', message.message_id);
       return;
@@ -443,13 +471,28 @@ export class TelegramBotRunner {
         return;
       }
 
+      // Nothing but media goes to the channel, so a post with no media has
+      // nothing to publish -- say so instead of sending an empty message.
+      if (!note?.media?.length) {
+        await sendText(this.token, chatId, '这条帖子没有图片或视频，没有可发布的内容。', message.message_id);
+        return;
+      }
+
       // Published first, remembered second: a crash in between repeats a post,
       // which is recoverable, while the reverse silently loses it.
+      // caption is passed explicitly, '' included: the channel gets the
+      // sender's own words or nothing, never the original title and link.
       await sendResolvedMedia(this.token, this.targetChatId, note, {
         deliveryMode: this.deliveryMode,
+        caption,
       });
       await this.rememberPublishedNote(noteKey);
-      await sendText(this.token, chatId, '已发布到频道。', message.message_id);
+      await sendText(
+        this.token,
+        chatId,
+        caption ? '已发布到频道，带上了你的说明。' : '已发布到频道。',
+        message.message_id,
+      );
     } catch (error) {
       const messageText = error instanceof Error ? error.message : 'Unknown error';
       await sendText(this.token, chatId, `解析失败：${messageText}`, message.message_id);

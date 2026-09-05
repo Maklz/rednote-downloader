@@ -99,6 +99,12 @@ DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
 - `TELEGRAM_BOT_TOKEN`: optional Telegram bot token.
 - `TELEGRAM_ALLOWED_CHAT_IDS`: optional allowlist of chat ids.
 - `TELEGRAM_DELIVERY_MODE`: `document` or `preview`.
+- `TELEGRAM_TARGET_CHAT_ID`: optional channel or chat to publish to. When set, the
+  bot posts only the images and videos there -- no title, no description, no link --
+  and replies to the sender with a confirmation instead of the media. To caption a
+  channel post, put a `*` after the link and write the caption after it:
+  `https://www.xiaohongshu.com/... * your caption`. Without a `*` the post has no
+  caption. The bot must be an administrator of the channel.
 - `REDNOTE_ADMIN_TOKEN`: optional admin token required by protected management endpoints.
 - `CORS_ALLOWED_ORIGINS`: optional comma-separated list of extra allowed origins.
   Behind a reverse proxy the public origin must be listed here: `X-Forwarded-Host`
