@@ -105,7 +105,9 @@ DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
   channel post, put a `*` after the link and write the caption after it:
   `https://www.xiaohongshu.com/... * your caption`. Without a `*` the post has no
   caption. Each note is published once; prefix the message with `/again` to publish
-  it again, which is how you add the caption you forgot. The bot must be an
+  it again, which is how you add the caption you forgot. A gallery becomes one
+  channel post per picture rather than a single album, and the caption goes on the
+  first of them. The bot must be an
   administrator of the channel.
 - `REDNOTE_ADMIN_TOKEN`: optional admin token required by protected management endpoints.
 - `CORS_ALLOWED_ORIGINS`: optional comma-separated list of extra allowed origins.

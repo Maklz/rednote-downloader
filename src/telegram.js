@@ -406,6 +406,14 @@ async function sendResolvedMedia(token, chatId, note, options = {}) {
     return;
   }
 
+  // A channel wants one post per picture, not a single album the reader has to
+  // open to page through. Direct replies keep grouping, which is tidier in a
+  // one-to-one chat.
+  if (options.separateItems) {
+    await sendResolvedMediaSequential(token, chatId, note, { ...options, caption });
+    return;
+  }
+
   try {
     const chunks = chunkTelegramMedia(media);
 
@@ -576,6 +584,7 @@ export class TelegramBotRunner {
       await sendResolvedMedia(this.token, this.targetChatId, note, {
         deliveryMode: this.deliveryMode,
         caption,
+        separateItems: true,
       });
       await this.rememberPublishedNote(noteKey);
       await sendText(

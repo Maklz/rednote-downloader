@@ -934,7 +934,7 @@ test('/list answers the sender without touching the channel', async () => {
 });
 
 // Publishes one note in preview mode and reports what Telegram was asked to do.
-async function publishInPreviewMode(mediaAll) {
+async function publishInPreviewMode(mediaAll, targetChatId = '-100999') {
   const originalFetch = global.fetch;
   const calls = [];
 
@@ -994,7 +994,7 @@ async function publishInPreviewMode(mediaAll) {
       token: 'demo-token',
       allowedChatIds: new Set(),
       deliveryMode: 'preview',
-      targetChatId: '-100999',
+      targetChatId,
     });
 
     await runner.handleMessage({ chat: { id: 1 }, text: 'https://x.com/demo/status/1', message_id: 1 });
@@ -1015,10 +1015,12 @@ test('a single video is sent as a streamable video, not a file', async () => {
 });
 
 test('a video inside a media group is marked streamable too', async () => {
+  // Albums are a direct-reply thing now: the channel posts each item on its own,
+  // so this asks for the reply path by leaving the target chat empty.
   const calls = await publishInPreviewMode([
     { type: 'video', url: 'https://video.twimg.com/demo/a.mp4' },
     { type: 'photo', url: 'https://pbs.twimg.com/media/b.jpg' },
-  ]);
+  ], '');
 
   const group = calls.find((call) => call.method === 'sendMediaGroup');
   assert.ok(group, 'several items go out as one media group');
@@ -1029,4 +1031,102 @@ test('a video inside a media group is marked streamable too', async () => {
   // Photos must not carry the flag.
   const photo = group.media.find((entry) => entry.type === 'photo');
   assert.equal(photo.supports_streaming, undefined);
+});
+
+// Publishes a note with several pictures and reports every Telegram call made.
+async function publishGallery(targetChatId) {
+  const originalFetch = global.fetch;
+  const calls = [];
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+
+    if (target.includes('/sendChatAction')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('api.fxtwitter.com/demo/status/1')) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          tweet: {
+            id: '1',
+            url: 'https://x.com/demo/status/1',
+            text: '示例推文正文',
+            author: { id: 'user-1', name: 'Demo User', screen_name: 'demo' },
+            media: {
+              all: [
+                { type: 'photo', url: 'https://pbs.twimg.com/media/a.jpg' },
+                { type: 'photo', url: 'https://pbs.twimg.com/media/b.jpg' },
+                { type: 'photo', url: 'https://pbs.twimg.com/media/c.jpg' },
+              ],
+            },
+          },
+        }),
+      };
+    }
+
+    if (target.includes('twimg.com')) {
+      return new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { 'Content-Type': 'image/jpeg' },
+      });
+    }
+
+    if (target.includes('/sendPhoto')) {
+      calls.push({ method: 'sendPhoto', caption: init.body.get('caption') });
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('/sendMediaGroup')) {
+      calls.push({ method: 'sendMediaGroup', count: JSON.parse(init.body.get('media')).length });
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('/sendMessage')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      deliveryMode: 'preview',
+      targetChatId,
+    });
+
+    await runner.handleMessage({
+      chat: { id: 1 },
+      text: `https://x.com/demo/status/1${targetChatId ? ' * Подпись' : ''}`,
+      message_id: 1,
+    });
+    return calls;
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+test('every picture becomes its own channel post', async () => {
+  const calls = await publishGallery('-100999');
+
+  assert.equal(calls.length, 3, 'three pictures, three posts');
+  assert.ok(calls.every((call) => call.method === 'sendPhoto'), 'no album is used');
+
+  // The caption belongs on the first post only; repeating it three times
+  // would just be noise.
+  assert.equal(calls[0].caption, 'Подпись');
+  assert.equal(calls[1].caption, null);
+  assert.equal(calls[2].caption, null);
+});
+
+test('direct replies still group pictures into one album', async () => {
+  const calls = await publishGallery('');
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'sendMediaGroup');
+  assert.equal(calls[0].count, 3);
 });
