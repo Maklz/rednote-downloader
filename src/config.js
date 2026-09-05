@@ -299,16 +299,20 @@ function normalizeLastPublication(value) {
   }
 
   const chatId = normalizeString(value.chatId);
-  const noteId = normalizeString(value.noteId);
   const messageIds = Array.isArray(value.messageIds)
     ? value.messageIds.filter((id) => Number.isInteger(id) && id > 0)
     : [];
+
+  // One message may carry several links, so a publication covers a list of
+  // notes. Records written before that carried a single noteId.
+  const rawNoteIds = Array.isArray(value.noteIds) ? value.noteIds : [value.noteId];
+  const noteIds = rawNoteIds.map((id) => normalizeString(id)).filter(Boolean);
 
   if (!chatId || !messageIds.length) {
     return null;
   }
 
-  return { chatId, noteId, messageIds };
+  return { chatId, noteIds, messageIds };
 }
 
 function normalizePublishedNoteIds(value) {

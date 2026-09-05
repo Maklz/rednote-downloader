@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   TelegramBotRunner,
   buildPublishedNoteKey,
+  buildBatchReport,
   buildPublishConfirmation,
   buildPublishedListText,
   parsePublishRequest,
@@ -1291,6 +1292,181 @@ test('/undo reports a deletion Telegram refuses and keeps the record', async () 
     // Nothing was actually removed, so the history must not be rewritten.
     assert.deepEqual(runner.publishedNoteIds, ['note-1']);
     assert.ok(runner.lastPublication, 'the record survives so /undo can be retried');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('buildBatchReport keeps the short answer for a single link', () => {
+  const one = { published: ['a'], skipped: [], empty: [], failed: [] };
+  assert.equal(buildBatchReport(one, false, ''), '已发布到频道。');
+  assert.equal(buildBatchReport(one, false, 'подпись'), '已发布到频道，带上了你的说明。');
+  assert.equal(buildBatchReport(one, true, ''), '已重新发布到频道。');
+});
+
+test('buildBatchReport accounts for every link once there are several', () => {
+  const text = buildBatchReport({
+    published: ['a', 'b'],
+    skipped: ['c'],
+    empty: ['d'],
+    failed: [{ input: 'e', reason: 'Unsupported host: evil.example' }],
+  }, false, '');
+
+  assert.match(text, /已发布 2 条/);
+  assert.match(text, /跳过 1 条/);
+  assert.match(text, /1 条没有图片或视频/);
+  assert.match(text, /失败：e — Unsupported host/);
+});
+
+test('a message with several links publishes all of them', async () => {
+  const originalFetch = global.fetch;
+  const posts = [];
+  const replies = [];
+  let messageId = 900;
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+
+    if (target.includes('/sendChatAction')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    const tweetMatch = target.match(/api\.fxtwitter\.com\/demo\/status\/(\d)/);
+    if (tweetMatch) {
+      const id = tweetMatch[1];
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          tweet: {
+            id,
+            url: `https://x.com/demo/status/${id}`,
+            text: '示例推文正文',
+            author: { id: 'user-1', name: 'Demo User', screen_name: 'demo' },
+            media: { all: [{ type: 'photo', url: `https://pbs.twimg.com/media/${id}.jpg` }] },
+          },
+        }),
+      };
+    }
+
+    if (target.includes('twimg.com')) {
+      return new Response(new Uint8Array([1]), {
+        status: 200,
+        headers: { 'Content-Type': 'image/jpeg' },
+      });
+    }
+
+    if (target.includes('/sendPhoto')) {
+      messageId += 1;
+      posts.push({ caption: init.body.get('caption'), messageId });
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: messageId } }) };
+    }
+
+    if (target.includes('/sendMessage')) {
+      replies.push(JSON.parse(init.body).text);
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      deliveryMode: 'preview',
+      targetChatId: '-100999',
+    });
+
+    await runner.handleMessage({
+      chat: { id: 1 },
+      text: 'https://x.com/demo/status/1 https://x.com/demo/status/2 https://x.com/demo/status/3 * Общая подпись',
+      message_id: 1,
+    });
+
+    assert.equal(posts.length, 3, 'all three links reach the channel');
+    // The caption lands on the first post only.
+    assert.equal(posts[0].caption, 'Общая подпись');
+    assert.equal(posts[1].caption, null);
+    assert.equal(posts[2].caption, null);
+
+    assert.match(replies.at(-1), /已发布 3 条/);
+
+    // One record covers the whole message, so /undo takes all three back.
+    assert.equal(runner.lastPublication.messageIds.length, 3);
+    assert.equal(runner.lastPublication.noteIds.length, 3);
+    assert.equal(runner.publishedNoteIds.length, 3);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('one bad link does not stop the rest of the message', async () => {
+  const originalFetch = global.fetch;
+  const posts = [];
+  const replies = [];
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+
+    if (target.includes('/sendChatAction')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('api.fxtwitter.com/demo/status/2')) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          tweet: {
+            id: '2',
+            url: 'https://x.com/demo/status/2',
+            text: '示例推文正文',
+            author: { id: 'user-1', name: 'Demo User', screen_name: 'demo' },
+            media: { all: [{ type: 'photo', url: 'https://pbs.twimg.com/media/2.jpg' }] },
+          },
+        }),
+      };
+    }
+
+    if (target.includes('twimg.com')) {
+      return new Response(new Uint8Array([1]), {
+        status: 200,
+        headers: { 'Content-Type': 'image/jpeg' },
+      });
+    }
+
+    if (target.includes('/sendPhoto')) {
+      posts.push(init.body.get('caption'));
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: 1 } }) };
+    }
+
+    if (target.includes('/sendMessage')) {
+      replies.push(JSON.parse(init.body).text);
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      deliveryMode: 'preview',
+      targetChatId: '-100999',
+    });
+
+    // The first host is not supported, so it fails before any network call.
+    await runner.handleMessage({
+      chat: { id: 1 },
+      text: 'https://evil.example/post https://x.com/demo/status/2',
+      message_id: 1,
+    });
+
+    assert.equal(posts.length, 1, 'the good link still goes out');
+    assert.match(replies.at(-1), /已发布 1 条/);
+    assert.match(replies.at(-1), /失败：https:\/\/evil\.example\/post/);
   } finally {
     global.fetch = originalFetch;
   }

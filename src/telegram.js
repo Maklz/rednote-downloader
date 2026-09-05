@@ -7,7 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { MAX_PUBLISHED_NOTE_IDS, normalizeEnvBoolean } from './config.js';
 import { inferMediaFileName } from './shared/media-filenames.js';
-import { extractFirstUrl, fetchMediaResponse, resolveNote } from './xhs.js';
+import { extractAllUrls, extractFirstUrl, fetchMediaResponse, resolveNote } from './xhs.js';
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
 const POLL_TIMEOUT_SECONDS = 30;
@@ -144,6 +144,42 @@ export function buildPublishedListText(noteIds, limit = PUBLISHED_LIST_LIMIT) {
 export function buildPublishConfirmation(force, caption) {
   const action = force ? '已重新发布到频道' : '已发布到频道';
   return caption ? `${action}，带上了你的说明。` : `${action}。`;
+}
+
+/**
+ * Reports what one message produced. A single link keeps the short one-line
+ * answer it always had; several links get a line per outcome, so nothing is
+ * dropped without the sender being told.
+ */
+export function buildBatchReport(report, force, caption) {
+  const total = report.published.length + report.skipped.length
+    + report.empty.length + report.failed.length;
+
+  if (total === 1 && report.published.length === 1) {
+    return buildPublishConfirmation(force, caption);
+  }
+
+  const lines = [];
+
+  if (report.published.length) {
+    lines.push(force
+      ? `已重新发布 ${report.published.length} 条。`
+      : `已发布 ${report.published.length} 条。`);
+  }
+
+  if (report.skipped.length) {
+    lines.push(`跳过 ${report.skipped.length} 条（已经发过，用 /again 可以再发）。`);
+  }
+
+  if (report.empty.length) {
+    lines.push(`${report.empty.length} 条没有图片或视频，没发。`);
+  }
+
+  for (const failure of report.failed) {
+    lines.push(`失败：${failure.input} — ${failure.reason}`);
+  }
+
+  return lines.length ? lines.join('\n') : '没有可发布的内容。';
 }
 
 export function inferTelegramFileName(item, note, index) {
@@ -467,6 +503,8 @@ function buildHelpText() {
     '同一条帖子默认只发一次。想再发一次（比如补上说明），在前面加 /again：',
     '/again https://www.xiaohongshu.com/... * 补上的说明',
     '',
+    '一条消息里可以放多个链接，会逐条发布，说明放在第一条上。',
+    '',
     '/list 可以看已经发布过哪些帖子。',
     '/undo 撤回上一次发布，频道里的消息会被删掉，那条帖子也能重新发。',
     '',
@@ -574,9 +612,11 @@ export class TelegramBotRunner {
     const { force, text: requestText } = parseRepublishCommand(text);
     const { linkText, caption } = parsePublishRequest(requestText);
 
-    let input;
+    let inputs;
     try {
-      input = extractFirstUrl(linkText);
+      // Every link in the message, not just the first: sending three used to
+      // publish one and drop the rest without saying anything.
+      inputs = this.targetChatId ? extractAllUrls(linkText) : [extractFirstUrl(linkText)];
     } catch {
       await sendText(this.token, chatId, '请直接发送小红书链接、x.com/twitter.com 链接，或者包含这些链接的整段分享文案。', message.message_id);
       return;
@@ -584,9 +624,9 @@ export class TelegramBotRunner {
 
     try {
       await sendChatAction(this.token, chatId, 'upload_document');
-      const note = await resolveNote(input);
 
       if (!this.targetChatId) {
+        const note = await resolveNote(inputs[0]);
         await sendResolvedMedia(this.token, chatId, note, {
           deliveryMode: this.deliveryMode,
           replyToMessageId: message.message_id,
@@ -594,49 +634,77 @@ export class TelegramBotRunner {
         return;
       }
 
-      const noteKey = buildPublishedNoteKey(note, input);
-      if (!force && this.publishedNoteIds.includes(noteKey)) {
-        await sendText(
-          this.token,
-          chatId,
-          '这条帖子已经发过频道了，跳过。想再发一次就用 /again，可以顺便改说明。',
-          message.message_id,
-        );
-        return;
-      }
-
-      // Nothing but media goes to the channel, so a post with no media has
-      // nothing to publish -- say so instead of sending an empty message.
-      if (!note?.media?.length) {
-        await sendText(this.token, chatId, '这条帖子没有图片或视频，没有可发布的内容。', message.message_id);
-        return;
-      }
-
-      // Published first, remembered second: a crash in between repeats a post,
-      // which is recoverable, while the reverse silently loses it.
-      // caption is passed explicitly, '' included: the channel gets the
-      // sender's own words or nothing, never the original title and link.
-      const messageIds = await sendResolvedMedia(this.token, this.targetChatId, note, {
-        deliveryMode: this.deliveryMode,
-        caption,
-        separateItems: true,
-      });
-      await this.rememberPublishedNote(noteKey);
-      await this.rememberLastPublication({
-        chatId: String(this.targetChatId),
-        noteId: noteKey,
-        messageIds,
-      });
-      await sendText(
-        this.token,
-        chatId,
-        buildPublishConfirmation(force, caption),
-        message.message_id,
-      );
+      const report = await this.publishToChannel(inputs, { caption, force });
+      await sendText(this.token, chatId, buildBatchReport(report, force, caption), message.message_id);
     } catch (error) {
       const messageText = error instanceof Error ? error.message : 'Unknown error';
       await sendText(this.token, chatId, `解析失败：${messageText}`, message.message_id);
     }
+  }
+
+  /**
+   * Publishes every link from one message. The caption goes on the first post
+   * that actually goes out, the same rule that puts it on the first picture of
+   * a gallery. One publication record covers the whole message, so /undo takes
+   * back everything that message produced, not only its last link.
+   */
+  async publishToChannel(inputs, { caption, force }) {
+    const report = {
+      published: [], skipped: [], empty: [], failed: [],
+    };
+    const messageIds = [];
+    const noteIds = [];
+    let captionUsed = false;
+
+    for (const input of inputs) {
+      try {
+        const note = await resolveNote(input);
+        const noteKey = buildPublishedNoteKey(note, input);
+
+        if (!force && this.publishedNoteIds.includes(noteKey)) {
+          report.skipped.push(input);
+          continue;
+        }
+
+        // Nothing but media goes to the channel, so a post without any has
+        // nothing to publish.
+        if (!note?.media?.length) {
+          report.empty.push(input);
+          continue;
+        }
+
+        // Published first, remembered second: a crash in between repeats a
+        // post, which is recoverable, while the reverse silently loses it.
+        // caption is passed explicitly, '' included: the channel gets the
+        // sender's own words or nothing, never the original title and link.
+        const sent = await sendResolvedMedia(this.token, this.targetChatId, note, {
+          deliveryMode: this.deliveryMode,
+          caption: captionUsed ? '' : caption,
+          separateItems: true,
+        });
+
+        captionUsed = captionUsed || Boolean(caption);
+        messageIds.push(...sent);
+        noteIds.push(noteKey);
+        report.published.push(input);
+        await this.rememberPublishedNote(noteKey);
+      } catch (error) {
+        report.failed.push({
+          input,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (messageIds.length) {
+      await this.rememberLastPublication({
+        chatId: String(this.targetChatId),
+        noteIds,
+        messageIds,
+      });
+    }
+
+    return report;
   }
 
   async rememberLastPublication(record) {
@@ -674,8 +742,9 @@ export class TelegramBotRunner {
       return `撤回失败：${failures[0]}`;
     }
 
-    if (record.noteId) {
-      this.publishedNoteIds = this.publishedNoteIds.filter((id) => id !== record.noteId);
+    const releasedNoteIds = new Set(Array.isArray(record.noteIds) ? record.noteIds : []);
+    if (releasedNoteIds.size) {
+      this.publishedNoteIds = this.publishedNoteIds.filter((id) => !releasedNoteIds.has(id));
       if (this.onPublishedNoteIdsChange) {
         await this.onPublishedNoteIdsChange(this.publishedNoteIds);
       }
