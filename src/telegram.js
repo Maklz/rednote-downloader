@@ -284,6 +284,12 @@ async function uploadMediaAsTelegramFile(token, method, fieldName, chatId, item,
       body.append('caption', options.caption);
     }
 
+    // Without this Telegram serves the video as a plain download rather than
+    // something the viewer can start playing before it has finished arriving.
+    if (fieldName === 'video') {
+      body.append('supports_streaming', 'true');
+    }
+
     body.append(fieldName, upload.fileBlob, upload.fileName);
 
     return await telegramRequest(token, method, body, true);
@@ -316,6 +322,10 @@ async function uploadMediaGroup(token, chatId, note, items, startIndex, options 
         type: getTelegramMediaGroupType(item, deliveryMode),
         media: `attach://${fieldName}`,
       };
+
+      if (mediaEntry.type === 'video') {
+        mediaEntry.supports_streaming = true;
+      }
 
       if (offset === 0 && options.caption) {
         mediaEntry.caption = options.caption;

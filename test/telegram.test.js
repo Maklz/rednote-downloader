@@ -932,3 +932,101 @@ test('/list answers the sender without touching the channel', async () => {
     global.fetch = originalFetch;
   }
 });
+
+// Publishes one note in preview mode and reports what Telegram was asked to do.
+async function publishInPreviewMode(mediaAll) {
+  const originalFetch = global.fetch;
+  const calls = [];
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+
+    if (target.includes('/sendChatAction')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('api.fxtwitter.com/demo/status/1')) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          tweet: {
+            id: '1',
+            url: 'https://x.com/demo/status/1',
+            text: '示例推文正文',
+            author: { id: 'user-1', name: 'Demo User', screen_name: 'demo' },
+            media: { all: mediaAll },
+          },
+        }),
+      };
+    }
+
+    if (target.includes('twimg.com')) {
+      const isVideo = target.includes('.mp4');
+      return new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { 'Content-Type': isVideo ? 'video/mp4' : 'image/jpeg' },
+      });
+    }
+
+    if (target.includes('/sendVideo') || target.includes('/sendPhoto')) {
+      calls.push({
+        method: target.split('/').pop(),
+        supportsStreaming: init.body.get('supports_streaming'),
+      });
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('/sendMediaGroup')) {
+      calls.push({ method: 'sendMediaGroup', media: JSON.parse(init.body.get('media')) });
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('/sendMessage')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      deliveryMode: 'preview',
+      targetChatId: '-100999',
+    });
+
+    await runner.handleMessage({ chat: { id: 1 }, text: 'https://x.com/demo/status/1', message_id: 1 });
+    return calls;
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+test('a single video is sent as a streamable video, not a file', async () => {
+  const calls = await publishInPreviewMode([
+    { type: 'video', url: 'https://video.twimg.com/demo/a.mp4' },
+  ]);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'sendVideo');
+  assert.equal(calls[0].supportsStreaming, 'true');
+});
+
+test('a video inside a media group is marked streamable too', async () => {
+  const calls = await publishInPreviewMode([
+    { type: 'video', url: 'https://video.twimg.com/demo/a.mp4' },
+    { type: 'photo', url: 'https://pbs.twimg.com/media/b.jpg' },
+  ]);
+
+  const group = calls.find((call) => call.method === 'sendMediaGroup');
+  assert.ok(group, 'several items go out as one media group');
+
+  const video = group.media.find((entry) => entry.type === 'video');
+  assert.equal(video.supports_streaming, true);
+
+  // Photos must not carry the flag.
+  const photo = group.media.find((entry) => entry.type === 'photo');
+  assert.equal(photo.supports_streaming, undefined);
+});
