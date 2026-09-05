@@ -9,10 +9,6 @@ export const DEFAULT_APP_CONFIG = {
     deliveryMode: 'document',
     targetChatId: '',
   },
-  translation: {
-    enabled: false,
-    apiKey: '',
-  },
 };
 
 export const DEFAULT_APP_STATE = {
@@ -102,7 +98,6 @@ export function normalizeServiceBaseUrl(value, fallback = '') {
 
 export function sanitizeAppConfig(input = {}) {
   const telegram = input?.telegram || {};
-  const translation = input?.translation || {};
 
   return {
     telegram: {
@@ -111,10 +106,6 @@ export function sanitizeAppConfig(input = {}) {
       allowedChatIds: normalizeString(telegram.allowedChatIds, DEFAULT_APP_CONFIG.telegram.allowedChatIds),
       deliveryMode: normalizeDeliveryMode(telegram.deliveryMode || DEFAULT_APP_CONFIG.telegram.deliveryMode),
       targetChatId: normalizeString(telegram.targetChatId, DEFAULT_APP_CONFIG.telegram.targetChatId),
-    },
-    translation: {
-      enabled: normalizeBoolean(translation.enabled, DEFAULT_APP_CONFIG.translation.enabled),
-      apiKey: normalizeString(translation.apiKey, DEFAULT_APP_CONFIG.translation.apiKey),
     },
   };
 }
@@ -125,10 +116,6 @@ export function mergeAppConfig(current, patch = {}) {
     telegram: {
       ...base.telegram,
       ...(patch.telegram || {}),
-    },
-    translation: {
-      ...base.translation,
-      ...(patch.translation || {}),
     },
   };
 
@@ -362,11 +349,6 @@ export function getPublicConfig(config) {
       allowedChatIds: normalized.telegram.allowedChatIds,
       deliveryMode: normalized.telegram.deliveryMode,
       targetChatId: normalized.telegram.targetChatId,
-    },
-    translation: {
-      enabled: normalized.translation.enabled,
-      apiKeyMasked: maskSecret(normalized.translation.apiKey),
-      apiKeySet: Boolean(normalized.translation.apiKey),
     },
   };
 }

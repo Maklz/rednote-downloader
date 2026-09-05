@@ -7,11 +7,7 @@ RUN apk add --no-cache \
   python3 \
   su-exec
 
-COPY package.json package-lock.json ./
-
-# The service now has a runtime dependency (the Anthropic SDK), so the image has
-# to install it. --omit=dev keeps the layer to just what the server needs.
-RUN npm ci --omit=dev
+COPY package.json ./
 COPY public ./public
 COPY src ./src
 COPY vendor/douyin-downloader /opt/douyin-downloader

@@ -12,8 +12,5 @@
     "dev": "node --watch src/server.js",
     "check:syntax": "node scripts/check-syntax.js",
     "test": "node --test"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.124.0"
   }
 }
