@@ -5,7 +5,7 @@ import net from 'node:net';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { test } from 'node:test';
 
-import { createRednoteApp } from './server-app.js';
+import { createRednoteApp, isTransportInterruption } from './server-app.js';
 
 async function startTestApp(t, overrides = {}) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'rednote-app-test-'));
@@ -650,4 +650,25 @@ test('CORS still allows the real same origin and configured extra origins', asyn
     headers: { Origin: 'https://rednote.example' },
   });
   assert.equal(configured.headers.get('access-control-allow-origin'), 'https://rednote.example');
+});
+
+test('isTransportInterruption tells a cancelled download from a real failure', () => {
+  const premature = new Error('Premature close');
+  premature.code = 'ERR_STREAM_PREMATURE_CLOSE';
+  assert.equal(isTransportInterruption(premature), true);
+
+  const reset = new Error('socket hang up');
+  reset.code = 'ECONNRESET';
+  assert.equal(isTransportInterruption(reset), true);
+
+  const aborted = new Error('aborted');
+  aborted.name = 'AbortError';
+  assert.equal(isTransportInterruption(aborted), true);
+
+  // A genuine bug must keep its stack and its error-level log.
+  assert.equal(isTransportInterruption(new TypeError('x is not a function')), false);
+  const upstream = new Error('Failed to download media: 500');
+  assert.equal(isTransportInterruption(upstream), false);
+  assert.equal(isTransportInterruption(null), false);
+  assert.equal(isTransportInterruption('ECONNRESET'), false);
 });

@@ -4,6 +4,7 @@ import {
   TelegramBotRunner,
   buildPublishedNoteKey,
   buildPublishConfirmation,
+  buildPublishedListText,
   parsePublishRequest,
   parseRepublishCommand,
   buildTelegramCaption,
@@ -869,6 +870,64 @@ test('/again publishes a note that is already in the history', async () => {
 
     // The history still holds exactly one entry for the note.
     assert.equal(runner.publishedNoteIds.length, 1);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('buildPublishedListText turns note ids back into links, newest first', () => {
+  const text = buildPublishedListText([
+    '6a818f8b000000002c002693',
+    '6a9ad665000000001001ec1b',
+  ]);
+
+  assert.match(text, /已发布 2 条/);
+  // Newest last in storage, so it must come out on top.
+  const firstLine = text.split('\n').find((line) => line.startsWith('1. '));
+  assert.equal(firstLine, '1. https://www.xiaohongshu.com/explore/6a9ad665000000001001ec1b');
+});
+
+test('buildPublishedListText handles an empty history, URL entries and the cap', () => {
+  assert.equal(buildPublishedListText([]), '还没有发布过任何帖子。');
+
+  // Entries that fell back to a URL are already links.
+  assert.match(buildPublishedListText(['https://x.com/demo/status/1']), /https:\/\/x\.com\/demo\/status\/1/);
+
+  const many = Array.from({ length: 25 }, (_, i) => `https://x.com/demo/status/${i}`);
+  const capped = buildPublishedListText(many, 20);
+  assert.match(capped, /已发布 25 条，最近 20 条/);
+  assert.equal(capped.split('\n').filter((line) => /^\d+\. /.test(line)).length, 20);
+  // The cap keeps the newest, not the oldest.
+  assert.match(capped, /status\/24/);
+  assert.ok(!capped.includes('status/4\n'), 'the oldest entries are dropped');
+});
+
+test('/list answers the sender without touching the channel', async () => {
+  const originalFetch = global.fetch;
+  const sent = [];
+
+  global.fetch = async (url, init = {}) => {
+    if (String(url).includes('/sendMessage')) {
+      const body = JSON.parse(init.body);
+      sent.push({ chatId: String(body.chat_id), text: body.text });
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      targetChatId: '-100999',
+      initialPublishedNoteIds: ['6a818f8b000000002c002693'],
+    });
+
+    await runner.handleMessage({ chat: { id: 12345 }, text: '/list', message_id: 1 });
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].chatId, '12345');
+    assert.match(sent[0].text, /xiaohongshu\.com\/explore\/6a818f8b000000002c002693/);
   } finally {
     global.fetch = originalFetch;
   }

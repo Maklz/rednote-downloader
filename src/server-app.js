@@ -118,6 +118,22 @@ function contentTypeFromMediaFileName(fileName) {
   return 'application/octet-stream';
 }
 
+const TRANSPORT_INTERRUPTION_CODES = new Set([
+  'ERR_STREAM_PREMATURE_CLOSE',
+  'ECONNRESET',
+  'EPIPE',
+  'ERR_STREAM_DESTROYED',
+]);
+
+export function isTransportInterruption(error) {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  return TRANSPORT_INTERRUPTION_CODES.has(error.code)
+    || (error instanceof Error && error.name === 'AbortError');
+}
+
 function isPathInside(candidate, root) {
   if (!candidate || !root) {
     return false;
@@ -905,12 +921,24 @@ export async function createRednoteApp(options = {}) {
         error: 'Not found',
       });
     } catch (error) {
-      settings.log.error('[http] request failed', request.method, url.pathname, error);
-
       if (response.headersSent || response.writableEnded) {
+        // The reply was already going out, so this is a transport interruption
+        // -- almost always the viewer cancelling a download or closing the tab.
+        // Nothing is broken and nothing can be reported to them any more, so
+        // log one line without the stack instead of a full error report.
+        if (isTransportInterruption(error)) {
+          settings.log.warn(
+            `[http] ${request.method} ${url.pathname} interrupted: ${error instanceof Error ? error.message : error}`,
+          );
+        } else {
+          settings.log.error('[http] request failed', request.method, url.pathname, error);
+        }
+
         response.destroy();
         return;
       }
+
+      settings.log.error('[http] request failed', request.method, url.pathname, error);
 
       sendJson(request, response, 502, {
         ok: false,

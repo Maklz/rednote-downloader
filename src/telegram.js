@@ -110,6 +110,37 @@ export function parseRepublishCommand(text) {
   return { force: false, text: source };
 }
 
+const XHS_NOTE_ID_PATTERN = /^[0-9a-f]{24}$/i;
+const PUBLISHED_LIST_LIMIT = 20;
+
+/**
+ * Renders the published history. Entries are stored as note ids, which are
+ * meaningless on their own, so they are turned back into note URLs; entries
+ * that fell back to a URL are already links and are shown as they are.
+ */
+export function buildPublishedListText(noteIds, limit = PUBLISHED_LIST_LIMIT) {
+  const entries = Array.isArray(noteIds) ? noteIds : [];
+
+  if (!entries.length) {
+    return '还没有发布过任何帖子。';
+  }
+
+  // Newest first: the list is appended to as posts go out.
+  const shown = entries.slice(-limit).reverse();
+  const lines = shown.map((entry, index) => {
+    const link = XHS_NOTE_ID_PATTERN.test(entry)
+      ? `https://www.xiaohongshu.com/explore/${entry}`
+      : entry;
+    return `${index + 1}. ${link}`;
+  });
+
+  const header = entries.length > shown.length
+    ? `已发布 ${entries.length} 条，最近 ${shown.length} 条：`
+    : `已发布 ${entries.length} 条：`;
+
+  return [header, '', ...lines].join('\n');
+}
+
 export function buildPublishConfirmation(force, caption) {
   const action = force ? '已重新发布到频道' : '已发布到频道';
   return caption ? `${action}，带上了你的说明。` : `${action}。`;
@@ -393,6 +424,8 @@ function buildHelpText() {
     '同一条帖子默认只发一次。想再发一次（比如补上说明），在前面加 /again：',
     '/again https://www.xiaohongshu.com/... * 补上的说明',
     '',
+    '/list 可以看已经发布过哪些帖子。',
+    '',
     '如果你想保留原始文件质量，保持默认 document 模式就可以。',
   ].join('\n');
 }
@@ -477,6 +510,11 @@ export class TelegramBotRunner {
 
     if (text === '/start' || text === '/help') {
       await sendText(this.token, chatId, buildHelpText(), message.message_id);
+      return;
+    }
+
+    if (text === '/list') {
+      await sendText(this.token, chatId, buildPublishedListText(this.publishedNoteIds), message.message_id);
       return;
     }
 
