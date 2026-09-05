@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   TelegramBotRunner,
   buildPublishedNoteKey,
+  buildPublishConfirmation,
   parsePublishRequest,
+  parseRepublishCommand,
   buildTelegramCaption,
   chunkTelegramMedia,
   getTelegramMediaGroupType,
@@ -750,6 +752,123 @@ test('replies to the sender still describe the note', async () => {
 
     assert.match(captured, /示例推文正文/);
     assert.match(captured, /x\.com\/demo\/status\/1/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('parseRepublishCommand strips the prefix and only then', () => {
+  assert.deepEqual(parseRepublishCommand('/again https://x/1 * текст'), {
+    force: true,
+    text: 'https://x/1 * текст',
+  });
+  assert.deepEqual(parseRepublishCommand('/repost https://x/1'), { force: true, text: 'https://x/1' });
+
+  // Telegram appends @botname to commands sent in groups.
+  assert.deepEqual(parseRepublishCommand('/again@mutantur_bot https://x/1'), {
+    force: true,
+    text: 'https://x/1',
+  });
+
+  // A plain link is untouched.
+  assert.deepEqual(parseRepublishCommand('https://x/1 * текст'), {
+    force: false,
+    text: 'https://x/1 * текст',
+  });
+
+  // A word that merely starts with the command is not the command.
+  assert.equal(parseRepublishCommand('/againstall https://x/1').force, false);
+
+  // The command alone leaves nothing to resolve, which the caller reports.
+  assert.deepEqual(parseRepublishCommand('/again'), { force: true, text: '' });
+});
+
+test('buildPublishConfirmation says which of the four things happened', () => {
+  assert.equal(buildPublishConfirmation(false, ''), '已发布到频道。');
+  assert.equal(buildPublishConfirmation(false, 'подпись'), '已发布到频道，带上了你的说明。');
+  assert.equal(buildPublishConfirmation(true, ''), '已重新发布到频道。');
+  assert.equal(buildPublishConfirmation(true, 'подпись'), '已重新发布到频道，带上了你的说明。');
+});
+
+test('/again publishes a note that is already in the history', async () => {
+  const originalFetch = global.fetch;
+  const documents = [];
+  const messages = [];
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+
+    if (target.includes('/sendChatAction')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('api.fxtwitter.com/demo/status/1')) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          tweet: {
+            id: '1',
+            url: 'https://x.com/demo/status/1',
+            text: '示例推文正文',
+            author: { id: 'user-1', name: 'Demo User', screen_name: 'demo' },
+            media: { all: [{ type: 'video', url: 'https://video.twimg.com/demo/original.mp4' }] },
+          },
+        }),
+      };
+    }
+
+    if (target.includes('video.twimg.com')) {
+      return new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { 'Content-Type': 'video/mp4' },
+      });
+    }
+
+    if (target.includes('/sendDocument')) {
+      documents.push({ chatId: String(init.body.get('chat_id')), caption: init.body.get('caption') });
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('/sendMessage')) {
+      const body = JSON.parse(init.body);
+      messages.push(body.text);
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      deliveryMode: 'document',
+      targetChatId: '-100999',
+    });
+
+    // First publish, no caption.
+    await runner.handleMessage({ chat: { id: 1 }, text: 'https://x.com/demo/status/1', message_id: 1 });
+    assert.equal(documents.length, 1);
+    assert.equal(documents[0].caption, null);
+
+    // Same link again: blocked, and the reply points at /again.
+    await runner.handleMessage({ chat: { id: 1 }, text: 'https://x.com/demo/status/1', message_id: 2 });
+    assert.equal(documents.length, 1, 'the duplicate must not reach the channel');
+    assert.match(messages.at(-1), /\/again/);
+
+    // With /again it goes out, this time with the caption.
+    await runner.handleMessage({
+      chat: { id: 1 },
+      text: '/again https://x.com/demo/status/1 * Забытая подпись',
+      message_id: 3,
+    });
+    assert.equal(documents.length, 2);
+    assert.equal(documents[1].caption, 'Забытая подпись');
+    assert.match(messages.at(-1), /已重新发布/);
+
+    // The history still holds exactly one entry for the note.
+    assert.equal(runner.publishedNoteIds.length, 1);
   } finally {
     global.fetch = originalFetch;
   }

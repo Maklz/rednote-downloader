@@ -81,6 +81,40 @@ export function parsePublishRequest(text) {
   };
 }
 
+const REPUBLISH_COMMANDS = ['/again', '/repost'];
+
+/**
+ * Detects the "publish this again" prefix and strips it. Without it a post that
+ * is already in the history is skipped, which is what stops a re-sent link from
+ * being posted twice; with it the sender can deliberately post the same note
+ * again, typically to give it the caption they forgot the first time.
+ */
+export function parseRepublishCommand(text) {
+  const source = String(text || '');
+  const trimmed = source.trimStart();
+
+  for (const command of REPUBLISH_COMMANDS) {
+    if (!trimmed.startsWith(command)) {
+      continue;
+    }
+
+    // Telegram appends @botname to commands sent in groups.
+    const rest = trimmed.slice(command.length).replace(/^@\S+/, '');
+    if (rest && !/^\s/.test(rest)) {
+      continue;
+    }
+
+    return { force: true, text: rest.trim() };
+  }
+
+  return { force: false, text: source };
+}
+
+export function buildPublishConfirmation(force, caption) {
+  const action = force ? '已重新发布到频道' : '已发布到频道';
+  return caption ? `${action}，带上了你的说明。` : `${action}。`;
+}
+
 export function inferTelegramFileName(item, note, index) {
   return inferMediaFileName(item, note, index, {
     totalItems: Array.isArray(note?.media) ? note.media.length : 1,
@@ -356,6 +390,9 @@ function buildHelpText() {
     '想给频道里的帖子写说明，就在链接后面加一个 * 再写你的文字：',
     'https://www.xiaohongshu.com/... * 这里是你的说明',
     '',
+    '同一条帖子默认只发一次。想再发一次（比如补上说明），在前面加 /again：',
+    '/again https://www.xiaohongshu.com/... * 补上的说明',
+    '',
     '如果你想保留原始文件质量，保持默认 document 模式就可以。',
   ].join('\n');
 }
@@ -443,7 +480,8 @@ export class TelegramBotRunner {
       return;
     }
 
-    const { linkText, caption } = parsePublishRequest(text);
+    const { force, text: requestText } = parseRepublishCommand(text);
+    const { linkText, caption } = parsePublishRequest(requestText);
 
     let input;
     try {
@@ -466,8 +504,13 @@ export class TelegramBotRunner {
       }
 
       const noteKey = buildPublishedNoteKey(note, input);
-      if (this.publishedNoteIds.includes(noteKey)) {
-        await sendText(this.token, chatId, '这条帖子已经发过频道了，跳过。', message.message_id);
+      if (!force && this.publishedNoteIds.includes(noteKey)) {
+        await sendText(
+          this.token,
+          chatId,
+          '这条帖子已经发过频道了，跳过。想再发一次就用 /again，可以顺便改说明。',
+          message.message_id,
+        );
         return;
       }
 
@@ -490,7 +533,7 @@ export class TelegramBotRunner {
       await sendText(
         this.token,
         chatId,
-        caption ? '已发布到频道，带上了你的说明。' : '已发布到频道。',
+        buildPublishConfirmation(force, caption),
         message.message_id,
       );
     } catch (error) {

@@ -104,7 +104,9 @@ DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
   and replies to the sender with a confirmation instead of the media. To caption a
   channel post, put a `*` after the link and write the caption after it:
   `https://www.xiaohongshu.com/... * your caption`. Without a `*` the post has no
-  caption. The bot must be an administrator of the channel.
+  caption. Each note is published once; prefix the message with `/again` to publish
+  it again, which is how you add the caption you forgot. The bot must be an
+  administrator of the channel.
 - `REDNOTE_ADMIN_TOKEN`: optional admin token required by protected management endpoints.
 - `CORS_ALLOWED_ORIGINS`: optional comma-separated list of extra allowed origins.
   Behind a reverse proxy the public origin must be listed here: `X-Forwarded-Host`
