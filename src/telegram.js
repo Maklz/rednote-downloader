@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { MAX_PUBLISHED_NOTE_IDS, normalizeEnvBoolean } from './config.js';
 import { inferMediaFileName } from './shared/media-filenames.js';
+import { translateCaption } from './translate.js';
 import { extractFirstUrl, fetchMediaResponse, resolveNote } from './xhs.js';
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
@@ -280,7 +281,7 @@ async function sendResolvedMediaItem(token, chatId, item, note, index, options =
 
 async function sendResolvedMediaSequential(token, chatId, note, options = {}) {
   const deliveryMode = options.deliveryMode || 'document';
-  const caption = buildTelegramCaption(note);
+  const caption = options.caption || buildTelegramCaption(note);
 
   for (const [index, item] of note.media.entries()) {
     await sendResolvedMediaItem(token, chatId, item, note, index, {
@@ -293,7 +294,7 @@ async function sendResolvedMediaSequential(token, chatId, note, options = {}) {
 
 async function sendResolvedMedia(token, chatId, note, options = {}) {
   const media = Array.isArray(note?.media) ? note.media : [];
-  const caption = buildTelegramCaption(note);
+  const caption = options.caption || buildTelegramCaption(note);
 
   if (!media.length) {
     await sendText(token, chatId, caption, options.replyToMessageId);
@@ -322,7 +323,7 @@ async function sendResolvedMedia(token, chatId, note, options = {}) {
     }
   } catch (error) {
     console.warn('[telegram] media group send failed, falling back to sequential uploads:', error instanceof Error ? error.message : error);
-    await sendResolvedMediaSequential(token, chatId, note, options);
+    await sendResolvedMediaSequential(token, chatId, note, { ...options, caption });
   }
 }
 
@@ -363,6 +364,7 @@ export class TelegramBotRunner {
     this.onPublishedNoteIdsChange = typeof options.onPublishedNoteIdsChange === 'function'
       ? options.onPublishedNoteIdsChange
       : null;
+    this.translation = options.translation || null;
     this.running = false;
     this.loopPromise = null;
     this.pollController = null;
@@ -443,10 +445,17 @@ export class TelegramBotRunner {
         return;
       }
 
+      const original = buildTelegramCaption(note);
+      const { text: caption, error: translationError } = await translateCaption(original, this.translation);
+      if (translationError) {
+        console.warn('[telegram] caption not translated, publishing the original:', translationError);
+      }
+
       // Published first, remembered second: a crash in between repeats a post,
       // which is recoverable, while the reverse silently loses it.
       await sendResolvedMedia(this.token, this.targetChatId, note, {
         deliveryMode: this.deliveryMode,
+        caption,
       });
       await this.rememberPublishedNote(noteKey);
       await sendText(this.token, chatId, '已发布到频道。', message.message_id);

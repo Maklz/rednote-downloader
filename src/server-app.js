@@ -276,7 +276,16 @@ function buildTelegramRuntimeConfig(config, env) {
     allowedChatIds,
     deliveryMode,
     targetChatId,
+    translation: buildTranslationRuntimeConfig(config, env),
   };
+}
+
+function buildTranslationRuntimeConfig(config, env) {
+  const saved = config?.translation || {};
+  const apiKey = String(saved.apiKey || env.ANTHROPIC_API_KEY || '').trim();
+  const enabled = saved.apiKey ? Boolean(saved.enabled) : normalizeEnvBoolean(env.TRANSLATION_ENABLED, false);
+
+  return { enabled, apiKey };
 }
 
 export function buildServerOptions(options = {}) {

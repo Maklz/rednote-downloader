@@ -99,6 +99,13 @@ DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
 - `TELEGRAM_BOT_TOKEN`: optional Telegram bot token.
 - `TELEGRAM_ALLOWED_CHAT_IDS`: optional allowlist of chat ids.
 - `TELEGRAM_DELIVERY_MODE`: `document` or `preview`.
+- `TELEGRAM_TARGET_CHAT_ID`: optional channel or chat to publish resolved posts to.
+  When set, media goes there instead of back to the sender, and the sender only gets
+  a confirmation. The bot must be an administrator of that channel.
+- `ANTHROPIC_API_KEY` / `TRANSLATION_ENABLED`: optional. With both set, captions
+  published to the channel are translated into Russian first. Translation failures
+  fall back to the original caption rather than dropping the post. Billed per call
+  against your Anthropic account.
 - `REDNOTE_ADMIN_TOKEN`: optional admin token required by protected management endpoints.
 - `CORS_ALLOWED_ORIGINS`: optional comma-separated list of extra allowed origins.
   Behind a reverse proxy the public origin must be listed here: `X-Forwarded-Host`
