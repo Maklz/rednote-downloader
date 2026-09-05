@@ -7,14 +7,20 @@ export const DEFAULT_APP_CONFIG = {
     botToken: '',
     allowedChatIds: '',
     deliveryMode: 'document',
+    targetChatId: '',
   },
 };
 
 export const DEFAULT_APP_STATE = {
   telegram: {
     updateOffset: 0,
+    publishedNoteIds: [],
   },
 };
+
+// Enough history to stop a re-sent link from being published twice, without
+// letting the state file grow without bound.
+export const MAX_PUBLISHED_NOTE_IDS = 500;
 
 function normalizeString(value, fallback = '') {
   if (typeof value !== 'string') {
@@ -99,6 +105,7 @@ export function sanitizeAppConfig(input = {}) {
       botToken: normalizeString(telegram.botToken, DEFAULT_APP_CONFIG.telegram.botToken),
       allowedChatIds: normalizeString(telegram.allowedChatIds, DEFAULT_APP_CONFIG.telegram.allowedChatIds),
       deliveryMode: normalizeDeliveryMode(telegram.deliveryMode || DEFAULT_APP_CONFIG.telegram.deliveryMode),
+      targetChatId: normalizeString(telegram.targetChatId, DEFAULT_APP_CONFIG.telegram.targetChatId),
     },
   };
 }
@@ -277,8 +284,26 @@ export function sanitizeAppState(input = {}) {
         telegram.updateOffset,
         DEFAULT_APP_STATE.telegram.updateOffset,
       ),
+      publishedNoteIds: normalizePublishedNoteIds(telegram.publishedNoteIds),
     },
   };
+}
+
+function normalizePublishedNoteIds(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set();
+  for (const entry of value) {
+    const id = normalizeString(entry);
+    if (id) {
+      seen.add(id);
+    }
+  }
+
+  // Newest last, so trimming from the front drops the oldest ids first.
+  return [...seen].slice(-MAX_PUBLISHED_NOTE_IDS);
 }
 
 export async function loadAppState(statePath) {
@@ -323,6 +348,7 @@ export function getPublicConfig(config) {
       botTokenSet: Boolean(normalized.telegram.botToken),
       allowedChatIds: normalized.telegram.allowedChatIds,
       deliveryMode: normalized.telegram.deliveryMode,
+      targetChatId: normalized.telegram.targetChatId,
     },
   };
 }

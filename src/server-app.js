@@ -262,6 +262,9 @@ function buildTelegramRuntimeConfig(config, env) {
   const allowedChatIds = hasSavedToken
     ? parseAllowedChatIds(saved.allowedChatIds)
     : parseAllowedChatIds(env.TELEGRAM_ALLOWED_CHAT_IDS);
+  const targetChatId = String(
+    (hasSavedToken ? saved.targetChatId : env.TELEGRAM_TARGET_CHAT_ID) || '',
+  ).trim();
   const enabled = hasSavedToken ? saved.enabled : true;
 
   if (!enabled) {
@@ -272,6 +275,7 @@ function buildTelegramRuntimeConfig(config, env) {
     token,
     allowedChatIds,
     deliveryMode,
+    targetChatId,
   };
 }
 
@@ -439,6 +443,16 @@ export async function createRednoteApp(options = {}) {
     });
   }
 
+  async function persistPublishedNoteIds(noteIds) {
+    appState = await saveAppState(settings.appStatePath, {
+      ...appState,
+      telegram: {
+        ...appState.telegram,
+        publishedNoteIds: noteIds,
+      },
+    });
+  }
+
   async function applyTelegramRuntime() {
     const nextRuntime = buildTelegramRuntimeConfig(appConfig, settings.env);
 
@@ -454,6 +468,8 @@ export async function createRednoteApp(options = {}) {
         ...nextRuntime,
         initialOffset: appState.telegram.updateOffset,
         onOffsetChange: persistTelegramOffset,
+        initialPublishedNoteIds: appState.telegram.publishedNoteIds,
+        onPublishedNoteIdsChange: persistPublishedNoteIds,
       });
       void telegramBot.start();
     }

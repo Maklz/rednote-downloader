@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   TelegramBotRunner,
+  buildPublishedNoteKey,
   buildTelegramCaption,
   chunkTelegramMedia,
   getTelegramMediaGroupType,
@@ -507,4 +508,94 @@ test('TelegramBotRunner stop aborts an in-flight long poll', async () => {
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test('buildPublishedNoteKey prefers the note id over the URL', () => {
+  assert.equal(buildPublishedNoteKey({ noteId: 'abc123', resolvedUrl: 'https://x/1' }, 'raw'), 'abc123');
+  assert.equal(buildPublishedNoteKey({ resolvedUrl: 'https://x/1' }, 'raw'), 'https://x/1');
+  assert.equal(buildPublishedNoteKey({}, 'raw'), 'raw');
+});
+
+// Drives one message through the bot and reports where media and text landed.
+async function runBotWithMessage(options, text, extraNotes = {}) {
+  const originalFetch = global.fetch;
+  const sent = [];
+  const savedNoteIds = [];
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+
+    if (target.includes('/getUpdates')) {
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          result: [{ update_id: 10, message: { chat: { id: 12345 }, text, message_id: 77 } }],
+        }),
+      };
+    }
+
+    if (target.includes('/sendChatAction')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('/sendMessage')) {
+      const body = JSON.parse(init.body);
+      sent.push({ kind: 'text', chatId: String(body.chat_id), text: body.text });
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('/sendDocument') || target.includes('/sendMediaGroup')) {
+      const chatId = init.body?.get ? String(init.body.get('chat_id')) : '?';
+      sent.push({ kind: 'media', chatId });
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      deliveryMode: 'document',
+      initialOffset: 0,
+      onPublishedNoteIdsChange: async (ids) => { savedNoteIds.push([...ids]); },
+      ...options,
+    });
+
+    // Stand in for the network-bound resolver.
+    runner.resolveNoteImpl = null;
+    runner.running = true;
+    await runner.pollOnce();
+    return { sent, savedNoteIds, runner };
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+test('help text still replies to the sender even when a channel is configured', async () => {
+  const { sent } = await runBotWithMessage({ targetChatId: '-1004376005872' }, '/help');
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].kind, 'text');
+  assert.equal(sent[0].chatId, '12345');
+});
+
+test('rememberPublishedNote caps history and persists it', async () => {
+  const saved = [];
+  const runner = new TelegramBotRunner({
+    token: 'demo-token',
+    allowedChatIds: new Set(),
+    initialPublishedNoteIds: ['old'],
+    onPublishedNoteIdsChange: async (ids) => { saved.push([...ids]); },
+  });
+
+  await runner.rememberPublishedNote('first');
+  await runner.rememberPublishedNote('first');
+  await runner.rememberPublishedNote('second');
+
+  assert.deepEqual(runner.publishedNoteIds, ['old', 'first', 'second']);
+  assert.equal(saved.length, 2, 'a repeat must not be persisted twice');
+  assert.deepEqual(saved.at(-1), ['old', 'first', 'second']);
 });

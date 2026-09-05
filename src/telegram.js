@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
-import { normalizeEnvBoolean } from './config.js';
+import { MAX_PUBLISHED_NOTE_IDS, normalizeEnvBoolean } from './config.js';
 import { inferMediaFileName } from './shared/media-filenames.js';
 import { extractFirstUrl, fetchMediaResponse, resolveNote } from './xhs.js';
 
@@ -334,6 +334,17 @@ function buildHelpText() {
   ].join('\n');
 }
 
+// Prefers the note id so the same post sent as a short link and as a full page
+// URL counts as one; falls back to the resolved URL, then the raw input.
+export function buildPublishedNoteKey(note, input) {
+  const noteId = String(note?.noteId || '').trim();
+  if (noteId) {
+    return noteId;
+  }
+
+  return String(note?.resolvedUrl || input || '').trim();
+}
+
 export class TelegramBotRunner {
   constructor(options) {
     this.token = options.token;
@@ -344,6 +355,13 @@ export class TelegramBotRunner {
       : 0;
     this.onOffsetChange = typeof options.onOffsetChange === 'function'
       ? options.onOffsetChange
+      : null;
+    this.targetChatId = String(options.targetChatId || '').trim();
+    this.publishedNoteIds = Array.isArray(options.initialPublishedNoteIds)
+      ? [...options.initialPublishedNoteIds]
+      : [];
+    this.onPublishedNoteIdsChange = typeof options.onPublishedNoteIdsChange === 'function'
+      ? options.onPublishedNoteIdsChange
       : null;
     this.running = false;
     this.loopPromise = null;
@@ -410,13 +428,43 @@ export class TelegramBotRunner {
     try {
       await sendChatAction(this.token, chatId, 'upload_document');
       const note = await resolveNote(input);
-      await sendResolvedMedia(this.token, chatId, note, {
+
+      if (!this.targetChatId) {
+        await sendResolvedMedia(this.token, chatId, note, {
+          deliveryMode: this.deliveryMode,
+          replyToMessageId: message.message_id,
+        });
+        return;
+      }
+
+      const noteKey = buildPublishedNoteKey(note, input);
+      if (this.publishedNoteIds.includes(noteKey)) {
+        await sendText(this.token, chatId, '这条帖子已经发过频道了，跳过。', message.message_id);
+        return;
+      }
+
+      // Published first, remembered second: a crash in between repeats a post,
+      // which is recoverable, while the reverse silently loses it.
+      await sendResolvedMedia(this.token, this.targetChatId, note, {
         deliveryMode: this.deliveryMode,
-        replyToMessageId: message.message_id,
       });
+      await this.rememberPublishedNote(noteKey);
+      await sendText(this.token, chatId, '已发布到频道。', message.message_id);
     } catch (error) {
       const messageText = error instanceof Error ? error.message : 'Unknown error';
       await sendText(this.token, chatId, `解析失败：${messageText}`, message.message_id);
+    }
+  }
+
+  async rememberPublishedNote(noteKey) {
+    if (!noteKey || this.publishedNoteIds.includes(noteKey)) {
+      return;
+    }
+
+    this.publishedNoteIds = [...this.publishedNoteIds, noteKey].slice(-MAX_PUBLISHED_NOTE_IDS);
+
+    if (this.onPublishedNoteIdsChange) {
+      await this.onPublishedNoteIdsChange(this.publishedNoteIds);
     }
   }
 
