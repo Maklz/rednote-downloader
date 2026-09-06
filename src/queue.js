@@ -65,8 +65,6 @@ export function buildEntryId(url) {
   return `c${Math.abs(hash).toString(36)}`;
 }
 
-export const RESET_INTERVAL_MS = 24 * 60 * 60 * 1000;
-
 export function sanitizeQueue(input) {
   const entries = Array.isArray(input?.entries) ? input.entries : [];
   const seen = new Map();
@@ -78,42 +76,7 @@ export function sanitizeQueue(input) {
     }
   }
 
-  return {
-    entries: [...seen.values()],
-    lastResetAt: normalizeTimestamp(input?.lastResetAt),
-  };
-}
-
-function normalizeTimestamp(value) {
-  const raw = normalizeString(value);
-  return raw && !Number.isNaN(Date.parse(raw)) ? raw : '';
-}
-
-export function isResetDue(queue, now = Date.now(), intervalMs = RESET_INTERVAL_MS) {
-  const lastResetAt = sanitizeQueue(queue).lastResetAt;
-
-  // A queue that has never been reset starts its cycle now rather than being
-  // wiped the moment the server comes up.
-  if (!lastResetAt) {
-    return false;
-  }
-
-  return now - Date.parse(lastResetAt) >= intervalMs;
-}
-
-/**
- * Clears the candidates awaiting a decision so the next day's feed is built
- * from scratch. Decided entries stay: they are what stops a rejected video
- * from being offered again tomorrow.
- */
-export function resetPendingEntries(queue, now = Date.now()) {
-  const current = sanitizeQueue(queue);
-  const kept = current.entries.filter((entry) => entry.status !== 'pending');
-
-  return {
-    queue: { entries: kept, lastResetAt: new Date(now).toISOString() },
-    cleared: current.entries.length - kept.length,
-  };
+  return { entries: [...seen.values()] };
 }
 
 export async function loadQueue(queuePath) {
@@ -138,11 +101,7 @@ export async function saveQueue(queuePath, queue) {
     .filter((entry) => entry.status !== 'pending')
     .slice(-MAX_HISTORY_ENTRIES);
 
-  const trimmed = {
-    entries: [...pending, ...decided],
-    // Stamped on first save so the daily cycle has a starting point.
-    lastResetAt: normalized.lastResetAt || new Date().toISOString(),
-  };
+  const trimmed = { entries: [...pending, ...decided] };
 
   await mkdir(path.dirname(queuePath), { recursive: true });
   await writeFile(queuePath, `${JSON.stringify(trimmed, null, 2)}\n`, 'utf8');
@@ -169,7 +128,7 @@ export function addQueueEntries(queue, candidates) {
     added.push(entry);
   }
 
-  return { queue: { entries: [...byId.values()], lastResetAt: current.lastResetAt }, added };
+  return { queue: { entries: [...byId.values()] }, added };
 }
 
 export function updateQueueEntry(queue, id, patch) {
@@ -185,7 +144,7 @@ export function updateQueueEntry(queue, id, patch) {
     return updated;
   });
 
-  return { queue: { entries, lastResetAt: current.lastResetAt }, updated };
+  return { queue: { entries }, updated };
 }
 
 export function getPendingEntries(queue) {

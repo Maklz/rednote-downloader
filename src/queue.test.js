@@ -9,8 +9,6 @@ import {
   buildEntryId,
   getPendingEntries,
   getQueuePath,
-  isResetDue,
-  resetPendingEntries,
   loadQueue,
   sanitizeQueueEntry,
   saveQueue,
@@ -109,51 +107,4 @@ test('getQueuePath sits beside the config unless told otherwise', () => {
 
   const explicit = path.resolve(path.sep, 'tmp', 'queue.json');
   assert.equal(getQueuePath({ REVIEW_QUEUE_PATH: explicit }, configPath), explicit);
-});
-
-test('isResetDue waits a full day and never fires on a queue that never reset', () => {
-  const day = 24 * 60 * 60 * 1000;
-  const start = Date.parse('2026-09-06T10:00:00.000Z');
-
-  // A fresh queue starts its cycle rather than being wiped on first sight.
-  assert.equal(isResetDue({ entries: [] }, start), false);
-
-  const queue = { entries: [], lastResetAt: new Date(start).toISOString() };
-  assert.equal(isResetDue(queue, start + day - 1000), false, 'a minute short is not due');
-  assert.equal(isResetDue(queue, start + day), true);
-  assert.equal(isResetDue(queue, start + 3 * day), true, 'a long gap is still just due');
-
-  // An unparseable stamp is treated as never-reset rather than as due.
-  assert.equal(isResetDue({ entries: [], lastResetAt: 'вчера' }, start), false);
-});
-
-test('resetPendingEntries clears the feed but keeps what was decided', () => {
-  const now = Date.parse('2026-09-07T10:00:00.000Z');
-  const { queue, cleared } = resetPendingEntries({
-    lastResetAt: '2026-09-06T10:00:00.000Z',
-    entries: [
-      { url: 'https://youtu.be/a', status: 'pending' },
-      { url: 'https://youtu.be/b', status: 'pending' },
-      { url: 'https://youtu.be/c', status: 'published' },
-      { url: 'https://youtu.be/d', status: 'rejected' },
-    ],
-  }, now);
-
-  assert.equal(cleared, 2);
-  assert.equal(getPendingEntries(queue).length, 0, 'the feed is empty and rebuilds from scratch');
-
-  // History survives: it is what stops a rejected video coming back tomorrow.
-  assert.deepEqual(queue.entries.map((e) => e.url), ['https://youtu.be/c', 'https://youtu.be/d']);
-  assert.equal(queue.lastResetAt, new Date(now).toISOString());
-  assert.equal(isResetDue(queue, now), false, 'the cycle restarts from the reset');
-});
-
-test('a rejected video stays rejected across a reset', () => {
-  const rejected = resetPendingEntries({
-    lastResetAt: '2026-09-06T10:00:00.000Z',
-    entries: [{ url: 'https://youtu.be/old', status: 'rejected' }],
-  }).queue;
-
-  const { added } = addQueueEntries(rejected, [{ url: 'https://youtu.be/old', title: 'Old' }]);
-  assert.equal(added.length, 0, 'it is not offered again after the feed is cleared');
 });

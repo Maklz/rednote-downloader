@@ -21,10 +21,7 @@ import {
   addQueueEntries,
   getPendingEntries,
   getQueuePath,
-  isResetDue,
   loadQueue,
-  RESET_INTERVAL_MS,
-  resetPendingEntries,
   saveQueue,
   updateQueueEntry,
 } from './queue.js';
@@ -381,37 +378,9 @@ export async function createRednoteApp(options = {}) {
   let telegramBot = null;
   let telegramRuntimeConfig = null;
 
-  /**
-   * Wipes the pending feed once a day so it is rebuilt from scratch. Checked on
-   * a timer rather than scheduled for a wall-clock hour, so a machine that was
-   * asleep at the appointed moment still gets its reset on the next check.
-   */
-  async function resetQueueIfDue() {
-    // A queue file written before the daily cycle existed carries no stamp, and
-    // without one nothing is ever due. Stamping it starts the cycle instead of
-    // wiping a feed the reviewer has not seen yet.
-    if (!reviewQueue.lastResetAt) {
-      reviewQueue = await saveQueue(settings.queuePath, reviewQueue);
-      return;
-    }
-
-    if (!isResetDue(reviewQueue)) {
-      return;
-    }
-
-    const { queue, cleared } = resetPendingEntries(reviewQueue);
-    reviewQueue = await saveQueue(settings.queuePath, queue);
-    settings.log.log(`[queue] daily reset: cleared ${cleared} pending candidate(s)`);
-  }
-
   async function handleQueueRead(request, response) {
-    await resetQueueIfDue();
-
     sendJson(request, response, 200, {
       ok: true,
-      nextResetAt: reviewQueue.lastResetAt
-        ? new Date(Date.parse(reviewQueue.lastResetAt) + RESET_INTERVAL_MS).toISOString()
-        : '',
       pending: getPendingEntries(reviewQueue),
       decided: reviewQueue.entries
         .filter((entry) => entry.status !== 'pending')
@@ -1124,23 +1093,9 @@ export async function createRednoteApp(options = {}) {
     }
   }
 
-  let queueResetTimer = null;
-
   async function start() {
     await ensureDirectories();
     await applyTelegramRuntime();
-    await resetQueueIfDue();
-
-    if (!queueResetTimer) {
-      // Checked often enough that the feed is never a long way past due, and
-      // unref-ed so it never holds the process open on its own.
-      queueResetTimer = setInterval(() => {
-        resetQueueIfDue().catch((error) => {
-          settings.log.error("[queue] daily reset failed:", error instanceof Error ? error.message : error);
-        });
-      }, 15 * 60_000);
-      queueResetTimer.unref?.();
-    }
 
     if (server.listening) {
       return server;
@@ -1169,11 +1124,6 @@ export async function createRednoteApp(options = {}) {
   }
 
   async function stop() {
-    if (queueResetTimer) {
-      clearInterval(queueResetTimer);
-      queueResetTimer = null;
-    }
-
     if (telegramBot) {
       await telegramBot.stop();
       telegramBot = null;
