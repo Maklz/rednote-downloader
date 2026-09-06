@@ -305,9 +305,6 @@ function buildTelegramRuntimeConfig(config, env) {
     allowedChatIds,
     deliveryMode,
     targetChatId,
-    // Candidates are offered to whoever the bot already answers: the first
-    // allowed chat. Without an allowlist there is nobody specific to ask.
-    reviewChatId: String(env.TELEGRAM_REVIEW_CHAT_ID || [...allowedChatIds][0] || "").trim(),
   };
 }
 
@@ -430,59 +427,7 @@ export async function createRednoteApp(options = {}) {
     const { queue, added } = addQueueEntries(reviewQueue, candidates);
 
     reviewQueue = await saveQueue(settings.queuePath, queue);
-
-    // Offered in the chat as well as on the page, so a decision can be made
-    // wherever the reviewer happens to be.
-    let offered = 0;
-    const reviewChatId = telegramRuntimeConfig?.reviewChatId;
-    if (telegramBot && reviewChatId && added.length) {
-      offered = (await telegramBot.offerCandidates(reviewChatId, added)).length;
-    }
-
-    sendJson(request, response, 200, {
-      ok: true,
-      added: added.length,
-      offered,
-      pending: getPendingEntries(reviewQueue).length,
-    });
-  }
-
-  /**
-   * Applies a decision made from the chat buttons. Shares the queue and the
-   * publishing path with the page, so both routes behave identically.
-   */
-  async function decideOnCandidate(id, action) {
-    const entry = getPendingEntries(reviewQueue).find((candidate) => candidate.id === id);
-
-    if (!entry) {
-      return { ok: false, text: 'Кандидата нет в очереди — возможно, решение уже принято.' };
-    }
-
-    if (action === 'reject') {
-      const { queue } = updateQueueEntry(reviewQueue, id, {
-        status: 'rejected',
-        decidedAt: new Date().toISOString(),
-      });
-      reviewQueue = await saveQueue(settings.queuePath, queue);
-      return { ok: true, text: 'Отклонено' };
-    }
-
-    if (!telegramBot || !telegramRuntimeConfig?.targetChatId) {
-      return { ok: false, text: 'Канал для публикации не настроен.' };
-    }
-
-    const report = await telegramBot.publishToChannel([entry.url], { caption: entry.caption, force: false });
-    const published = report.published.length > 0;
-    const reason = report.failed[0]?.reason || 'Опубликовать не удалось.';
-
-    const { queue } = updateQueueEntry(reviewQueue, id, {
-      status: published ? 'published' : 'pending',
-      decidedAt: published ? new Date().toISOString() : '',
-      error: published ? '' : reason,
-    });
-    reviewQueue = await saveQueue(settings.queuePath, queue);
-
-    return published ? { ok: true, text: 'Опубликовано' } : { ok: false, text: reason };
+    sendJson(request, response, 200, { ok: true, added: added.length, pending: getPendingEntries(reviewQueue).length });
   }
 
   async function handleQueueDecision(request, response, id) {
@@ -663,7 +608,6 @@ export async function createRednoteApp(options = {}) {
         onPublishedNoteIdsChange: persistPublishedNoteIds,
         initialLastPublication: appState.telegram.lastPublication,
         onLastPublicationChange: persistLastPublication,
-        onCandidateDecision: decideOnCandidate,
       });
       void telegramBot.start();
     }
