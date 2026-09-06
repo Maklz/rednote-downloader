@@ -401,6 +401,52 @@ async function editMessageCaption(token, chatId, messageId, caption) {
   });
 }
 
+/**
+ * Offers one candidate for review with the two buttons that decide it. The
+ * callback data carries the queue id, which is short by construction -- Telegram
+ * caps callback data at 64 bytes.
+ */
+export function buildCandidateMessage(entry) {
+  const facts = [
+    entry.author,
+    entry.duration ? `${entry.duration}с` : '',
+    entry.width && entry.height ? `${entry.width}×${entry.height}` : '',
+    entry.sizeBytes ? `${(entry.sizeBytes / 1048576).toFixed(1)} МБ` : '',
+    entry.uploadDate,
+  ].filter(Boolean).join(' · ');
+
+  return [entry.title, facts, entry.url].filter(Boolean).join('\n');
+}
+
+async function sendCandidate(token, chatId, entry) {
+  return telegramRequest(token, 'sendMessage', {
+    chat_id: chatId,
+    text: buildCandidateMessage(entry),
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '✅ Опубликовать', callback_data: `pub:${entry.id}` },
+        { text: '✖ Отклонить', callback_data: `rej:${entry.id}` },
+      ]],
+    },
+  });
+}
+
+async function answerCallbackQuery(token, callbackQueryId, text) {
+  return telegramRequest(token, 'answerCallbackQuery', {
+    callback_query_id: callbackQueryId,
+    text,
+  });
+}
+
+async function editMessageText(token, chatId, messageId, text) {
+  return telegramRequest(token, 'editMessageText', {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    disable_web_page_preview: true,
+  });
+}
+
 async function sendChatAction(token, chatId, action) {
   return telegramRequest(token, 'sendChatAction', {
     chat_id: chatId,
@@ -644,6 +690,9 @@ export class TelegramBotRunner {
       ? options.onPublishedNoteIdsChange
       : null;
     this.env = options.env || process.env;
+    this.onCandidateDecision = typeof options.onCandidateDecision === 'function'
+      ? options.onCandidateDecision
+      : null;
     this.lastPublication = options.initialLastPublication || null;
     this.onLastPublicationChange = typeof options.onLastPublicationChange === 'function'
       ? options.onLastPublicationChange
@@ -888,6 +937,70 @@ export class TelegramBotRunner {
     });
   }
 
+  /**
+   * Offers candidates for review in the chat, so choosing what to publish does
+   * not mean opening the web page. Failures are reported rather than thrown:
+   * one candidate that cannot be offered must not stop the rest.
+   */
+  async offerCandidates(chatId, entries) {
+    const offered = [];
+
+    for (const entry of entries) {
+      try {
+        await sendCandidate(this.token, chatId, entry);
+        offered.push(entry.id);
+      } catch (error) {
+        console.error('[telegram] could not offer candidate:', error instanceof Error ? error.message : error);
+      }
+    }
+
+    return offered;
+  }
+
+  /**
+   * Handles a tap on one of the review buttons. The decision itself belongs to
+   * whoever owns the queue, so it is delegated; this only speaks to Telegram.
+   */
+  async handleCallbackQuery(query) {
+    const chatId = query?.message?.chat?.id;
+    const data = String(query?.data || '');
+    const [action, id] = data.split(':');
+
+    if (!chatId || !id || !['pub', 'rej'].includes(action)) {
+      return;
+    }
+
+    if (!isTelegramChatAllowed(chatId, this.allowedChatIds)) {
+      await answerCallbackQuery(this.token, query.id, 'Этот чат не разрешён.');
+      return;
+    }
+
+    if (!this.onCandidateDecision) {
+      await answerCallbackQuery(this.token, query.id, 'Очередь недоступна.');
+      return;
+    }
+
+    // Telegram shows a spinner on the button until the callback is answered,
+    // and publishing takes a while, so it is answered before the work starts.
+    await answerCallbackQuery(this.token, query.id, action === 'pub' ? 'Публикую…' : 'Отклоняю…');
+
+    let outcome;
+    try {
+      outcome = await this.onCandidateDecision(id, action === 'pub' ? 'publish' : 'reject');
+    } catch (error) {
+      outcome = { ok: false, text: error instanceof Error ? error.message : String(error) };
+    }
+
+    const original = query.message?.text || '';
+    const mark = outcome.ok ? (action === 'pub' ? '✅ Опубликовано' : '✖ Отклонено') : `⚠ ${outcome.text}`;
+
+    try {
+      await editMessageText(this.token, chatId, query.message.message_id, `${original}\n\n${mark}`);
+    } catch {
+      // The message may be too old to edit; the decision still stands.
+    }
+  }
+
   async rememberLastPublication(record) {
     this.lastPublication = record;
 
@@ -965,6 +1078,10 @@ export class TelegramBotRunner {
       try {
         if (update.message) {
           await this.handleMessage(update.message);
+        }
+
+        if (update.callback_query) {
+          await this.handleCallbackQuery(update.callback_query);
         }
 
         this.failedUpdateId = null;

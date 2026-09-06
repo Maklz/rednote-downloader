@@ -7,6 +7,7 @@ import {
   TelegramBotRunner,
   buildPublishedNoteKey,
   buildBatchReport,
+  buildCandidateMessage,
   buildPublishConfirmation,
   buildPublishedListText,
   parseCaptionCommand,
@@ -1735,5 +1736,116 @@ test('a yt-dlp download is uploaded from disk, not fetched by URL', async () => 
   } finally {
     global.fetch = originalFetch;
     await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('buildCandidateMessage shows only the facts a source reported', () => {
+  const full = buildCandidateMessage({
+    title: 'KEEP GRINDING', author: 'Ben Lionel Scott',
+    duration: 11, width: 608, height: 1080, sizeBytes: 498578,
+    uploadDate: '2026-08-28', url: 'https://youtu.be/x',
+  });
+  assert.match(full, /KEEP GRINDING/);
+  assert.match(full, /Ben Lionel Scott · 11с · 608×1080 · 0\.5 МБ · 2026-08-28/);
+  assert.match(full, /https:\/\/youtu\.be\/x/);
+
+  // Missing facts leave no stray separators behind.
+  const bare = buildCandidateMessage({ title: 'Clip', url: 'https://youtu.be/y' });
+  assert.equal(bare, 'Clip\nhttps://youtu.be/y');
+});
+
+test('a review button publishes through the queue and marks the message', async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  const decisions = [];
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+    const body = init.body ? JSON.parse(init.body) : {};
+
+    if (target.includes('/answerCallbackQuery')) {
+      calls.push({ method: 'answer', text: body.text });
+      return { ok: true, json: async () => ({ ok: true, result: true }) };
+    }
+    if (target.includes('/editMessageText')) {
+      calls.push({ method: 'edit', text: body.text });
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(['12345']),
+      targetChatId: '-100999',
+      onCandidateDecision: async (id, action) => {
+        decisions.push({ id, action });
+        return { ok: true, text: 'Опубликовано' };
+      },
+    });
+
+    await runner.handleCallbackQuery({
+      id: 'cb1',
+      data: 'pub:cabc123',
+      message: { message_id: 55, chat: { id: 12345 }, text: 'KEEP GRINDING\nhttps://youtu.be/x' },
+    });
+
+    assert.deepEqual(decisions, [{ id: 'cabc123', action: 'publish' }]);
+    // Answered before the work starts, so the button stops spinning.
+    assert.equal(calls[0].method, 'answer');
+    assert.equal(calls[0].text, 'Публикую…');
+    // The offer is marked so it cannot be acted on twice by mistake.
+    assert.match(calls.at(-1).text, /✅ Опубликовано/);
+    assert.match(calls.at(-1).text, /KEEP GRINDING/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('a review button refuses a chat that is not allowed, and reports failures', async () => {
+  const originalFetch = global.fetch;
+  const answers = [];
+  let decisionCalls = 0;
+
+  global.fetch = async (url, init = {}) => {
+    const body = init.body ? JSON.parse(init.body) : {};
+    if (String(url).includes('/answerCallbackQuery')) {
+      answers.push(body.text);
+      return { ok: true, json: async () => ({ ok: true, result: true }) };
+    }
+    if (String(url).includes('/editMessageText')) {
+      answers.push(body.text);
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(['12345']),
+      onCandidateDecision: async () => {
+        decisionCalls += 1;
+        throw new Error('канал не настроен');
+      },
+    });
+
+    await runner.handleCallbackQuery({
+      id: 'cb1', data: 'pub:cabc', message: { message_id: 1, chat: { id: 99999 }, text: 'x' },
+    });
+    assert.equal(decisionCalls, 0, 'a stranger never reaches the queue');
+    assert.match(answers[0], /не разрешён/);
+
+    // A thrown decision is reported on the message rather than lost.
+    await runner.handleCallbackQuery({
+      id: 'cb2', data: 'pub:cabc', message: { message_id: 2, chat: { id: 12345 }, text: 'Clip' },
+    });
+    assert.match(answers.at(-1), /⚠ канал не настроен/);
+
+    // Malformed callback data is ignored outright.
+    await runner.handleCallbackQuery({ id: 'cb3', data: 'nonsense', message: { chat: { id: 12345 } } });
+  } finally {
+    global.fetch = originalFetch;
   }
 });
