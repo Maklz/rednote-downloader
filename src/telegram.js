@@ -7,7 +7,6 @@ import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { MAX_PUBLISHED_NOTE_IDS, normalizeEnvBoolean } from './config.js';
 import { inferMediaFileName } from './shared/media-filenames.js';
-import { downloadVideo, probeVideo } from './ytdlp.js';
 import { extractAllUrls, extractFirstUrl, fetchMediaResponse, resolveNote } from './xhs.js';
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
@@ -320,33 +319,7 @@ async function fetchTelegramUploadMedia(item) {
   throw new Error(errors[0] || 'Failed to download media for Telegram upload');
 }
 
-function contentTypeForUpload(item, fileName) {
-  const lower = String(fileName || '').toLowerCase();
-  if (lower.endsWith('.mp4') || lower.endsWith('.m4v')) return 'video/mp4';
-  if (lower.endsWith('.webm')) return 'video/webm';
-  if (lower.endsWith('.mov')) return 'video/quicktime';
-  if (lower.endsWith('.png')) return 'image/png';
-  if (lower.endsWith('.webp')) return 'image/webp';
-  if (lower.endsWith('.gif')) return 'image/gif';
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-
-  return item?.type === 'video' ? 'video/mp4' : 'image/jpeg';
-}
-
 async function materializeTelegramUpload(item, note, index) {
-  // Sources that need a downloader of their own hand over a finished file
-  // instead of a URL: their streams are signed, and the good ones arrive as
-  // separate video and audio that had to be merged first.
-  if (item?.localPath) {
-    const fileName = path.basename(item.localPath);
-    return {
-      // Owned by whoever downloaded it, so it is not cleaned up here.
-      tempDir: null,
-      fileBlob: await openAsBlob(item.localPath, { type: contentTypeForUpload(item, fileName) }),
-      fileName,
-    };
-  }
-
   const { response } = await fetchTelegramUploadMedia(item);
   const contentType = response.headers.get('content-type') || (item.type === 'video' ? 'video/mp4' : 'image/jpeg');
   const fileName = inferTelegramFileName(item, note, index);
@@ -643,7 +616,6 @@ export class TelegramBotRunner {
     this.onPublishedNoteIdsChange = typeof options.onPublishedNoteIdsChange === 'function'
       ? options.onPublishedNoteIdsChange
       : null;
-    this.env = options.env || process.env;
     this.lastPublication = options.initialLastPublication || null;
     this.onLastPublicationChange = typeof options.onLastPublicationChange === 'function'
       ? options.onLastPublicationChange
@@ -757,38 +729,6 @@ export class TelegramBotRunner {
    * a gallery. One publication record covers the whole message, so /undo takes
    * back everything that message produced, not only its last link.
    */
-  /**
-   * Resolves a link, whichever platform it is from. The built-in resolvers are
-   * tried first; anything they do not recognise goes to yt-dlp, which covers
-   * most of the rest of the web but has to download the file up front because
-   * its streams are signed and often need merging. The returned `cleanup`
-   * removes anything that was written to disk.
-   */
-  async resolveForPublishing(input) {
-    try {
-      return { note: await resolveNote(input), cleanup: null };
-    } catch (error) {
-      if (!/unsupported host/i.test(error?.message || '')) {
-        throw error;
-      }
-    }
-
-    const note = await probeVideo(input, { env: this.env });
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'rednote-ytdlp-'));
-
-    try {
-      note.media[0].localPath = await downloadVideo(input, tempDir, { env: this.env });
-    } catch (error) {
-      await rm(tempDir, { recursive: true, force: true });
-      throw error;
-    }
-
-    return {
-      note,
-      cleanup: () => rm(tempDir, { recursive: true, force: true }),
-    };
-  }
-
   async publishToChannel(inputs, { caption, force }) {
     const report = {
       published: [], skipped: [], empty: [], failed: [],
@@ -798,12 +738,8 @@ export class TelegramBotRunner {
     let captionUsed = false;
 
     for (const input of inputs) {
-      let cleanup = null;
-
       try {
-        const resolved = await this.resolveForPublishing(input);
-        const { note } = resolved;
-        cleanup = resolved.cleanup;
+        const note = await resolveNote(input);
         const noteKey = buildPublishedNoteKey(note, input);
 
         if (!force && this.publishedNoteIds.includes(noteKey)) {
@@ -838,12 +774,6 @@ export class TelegramBotRunner {
           input,
           reason: error instanceof Error ? error.message : String(error),
         });
-      } finally {
-        // Downloaded files are large and there is one per link, so they go as
-        // soon as the upload is done rather than at the end of the batch.
-        if (cleanup) {
-          await cleanup().catch(() => {});
-        }
       }
     }
 
@@ -877,15 +807,6 @@ export class TelegramBotRunner {
     }
 
     return caption ? '说明已更新。' : '说明已清空。';
-  }
-
-  // Test seam: publishes one already-resolved note, skipping resolution.
-  async publishNoteForTest(note, caption = "") {
-    return sendResolvedMedia(this.token, this.targetChatId, note, {
-      deliveryMode: this.deliveryMode,
-      caption,
-      separateItems: true,
-    });
   }
 
   async rememberLastPublication(record) {

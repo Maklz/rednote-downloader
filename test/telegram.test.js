@@ -1,8 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import os from 'node:os';
-import path from 'node:path';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import {
   TelegramBotRunner,
   buildPublishedNoteKey,
@@ -1680,60 +1677,5 @@ test('a video upload tells Telegram its real shape', async () => {
     assert.equal(sent.streaming, 'true');
   } finally {
     global.fetch = originalFetch;
-  }
-});
-
-test('a yt-dlp download is uploaded from disk, not fetched by URL', async () => {
-  const originalFetch = global.fetch;
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'rednote-localpath-'));
-  const localPath = path.join(tmpDir, 'clip.mp4');
-  await writeFile(localPath, Buffer.from([1, 2, 3, 4]));
-
-  const sent = {};
-
-  global.fetch = async (url, init = {}) => {
-    const target = String(url);
-
-    if (target.includes('/sendVideo')) {
-      const file = init.body.get('video');
-      sent.fileName = file.name;
-      sent.size = file.size;
-      sent.width = init.body.get('width');
-      sent.duration = init.body.get('duration');
-      return { ok: true, json: async () => ({ ok: true, result: { message_id: 1 } }) };
-    }
-
-    // Reaching the network at all would mean the local file was ignored.
-    throw new Error(`Unexpected fetch: ${target}`);
-  };
-
-  try {
-    const runner = new TelegramBotRunner({
-      token: 'demo-token',
-      allowedChatIds: new Set(),
-      deliveryMode: 'preview',
-      targetChatId: '-100999',
-    });
-
-    const note = {
-      noteId: 'ytdlp:Youtube:abc',
-      title: 'Clip',
-      media: [{
-        index: 1, type: 'video', url: '', localPath, width: 720, height: 1280, duration: 61,
-      }],
-    };
-
-    const ids = await runner.publishNoteForTest(note);
-
-    assert.deepEqual(ids, [1]);
-    assert.equal(sent.fileName, 'clip.mp4');
-    assert.equal(sent.size, 4);
-    assert.equal(sent.width, '720');
-    assert.equal(sent.duration, '61');
-    // The downloaded file belongs to whoever fetched it and must survive upload.
-    assert.equal((await stat(localPath)).size, 4);
-  } finally {
-    global.fetch = originalFetch;
-    await rm(tmpDir, { recursive: true, force: true });
   }
 });

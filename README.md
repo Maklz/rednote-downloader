@@ -220,12 +220,6 @@ Telegram 轮询状态路径：
   一条消息里可以放多个链接，逐条发布，说明放在第一条上，回复里会说明每条链接的结果。
   `/caption 新的说明` 直接改上一次发布的说明，不重新上传媒体。
   机器人需要是该频道的管理员。
-- `YTDLP_COMMAND` / `PYTHON_COMMAND`: 可选。内置解析器不认识的站点（YouTube、TikTok、
-  Instagram 等）会交给 yt-dlp 处理。默认 `python -m yt_dlp`；用独立二进制时设置 `YTDLP_COMMAND`。
-  没装 yt-dlp 时这类链接会直接失败，不影响已支持的平台。
-- `FFMPEG_LOCATION`: 可选，ffmpeg 所在目录。yt-dlp 需要它合并分离的音视频流；没有它画质
-  只能取站点提供的已合并流。
-- `YTDLP_FORMAT`: 可选，yt-dlp 格式选择器。默认 1080p 及以下，再高 Telegram 也会重新编码。
 - `REDNOTE_ADMIN_TOKEN`: 可选，设置后管理接口需要 `X-Admin-Token`。
 - `CORS_ALLOWED_ORIGINS`: 可选，额外允许跨域访问管理接口的 Origin，逗号分隔。
   反向代理部署需要在此列出对外 Origin：判断同源时会忽略 `X-Forwarded-Host` 与
