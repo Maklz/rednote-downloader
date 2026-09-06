@@ -41,6 +41,15 @@ function isAbortError(error) {
   return error instanceof Error && error.name === 'AbortError';
 }
 
+export function isTelegramConflictError(error) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  // Telegram's wording for "someone else is already polling this token".
+  return /conflict|terminated by other getupdates/i.test(error.message);
+}
+
 function isTelegramEntityTooLargeError(error) {
   if (!(error instanceof Error)) {
     return false;
@@ -932,7 +941,18 @@ export class TelegramBotRunner {
             break;
           }
 
-          console.error('[telegram] polling error:', error instanceof Error ? error.message : error);
+          if (isTelegramConflictError(error)) {
+            // Telegram allows one long poll per token. Two instances would take
+            // turns stealing it from each other and neither would answer
+            // reliably, so this says what to do instead of scrolling past as a
+            // generic failure.
+            console.error(
+              '[telegram] another instance is polling with this bot token — close the other one, '
+                + 'this one will keep retrying',
+            );
+          } else {
+            console.error('[telegram] polling error:', error instanceof Error ? error.message : error);
+          }
           if (!this.running) {
             break;
           }

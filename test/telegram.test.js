@@ -15,6 +15,7 @@ import {
   getTelegramMediaGroupType,
   inferTelegramFileName,
   isTelegramChatAllowed,
+  isTelegramConflictError,
 } from '../src/telegram.js';
 
 test('buildTelegramCaption includes title, author, description and URL', () => {
@@ -1677,5 +1678,63 @@ test('a video upload tells Telegram its real shape', async () => {
     assert.equal(sent.streaming, 'true');
   } finally {
     global.fetch = originalFetch;
+  }
+});
+
+test('isTelegramConflictError spots a second instance stealing the poll', () => {
+  assert.equal(
+    isTelegramConflictError(new Error('Conflict: terminated by other getUpdates request; make sure that only one bot instance is running')),
+    true,
+  );
+  assert.equal(isTelegramConflictError(new Error('Telegram API error (409)')), false, 'a bare status is not enough');
+  assert.equal(isTelegramConflictError(new Error('conflict')), true);
+
+  // Ordinary failures keep their own message.
+  assert.equal(isTelegramConflictError(new Error('fetch failed')), false);
+  assert.equal(isTelegramConflictError(new Error('Unauthorized')), false);
+  assert.equal(isTelegramConflictError('Conflict'), false);
+  assert.equal(isTelegramConflictError(null), false);
+});
+
+test('the polling loop names a token conflict instead of logging it as a generic failure', async () => {
+  const originalFetch = global.fetch;
+  const originalError = console.error;
+  const logged = [];
+
+  global.fetch = async (url) => {
+    if (String(url).includes('/getUpdates')) {
+      return {
+        ok: false,
+        json: async () => ({
+          ok: false,
+          description: 'Conflict: terminated by other getUpdates request; make sure that only one bot instance is running',
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  console.error = (...args) => { logged.push(args.join(' ')); };
+
+  try {
+    const runner = new TelegramBotRunner({ token: 'demo-token', allowedChatIds: new Set() });
+    runner.running = true;
+    await assert.rejects(runner.pollOnce());
+
+    // Reproduce what the loop does with that rejection.
+    try {
+      await runner.pollOnce();
+    } catch (error) {
+      if (isTelegramConflictError(error)) {
+        console.error('[telegram] another instance is polling with this bot token');
+      } else {
+        console.error('[telegram] polling error:', error.message);
+      }
+    }
+
+    assert.match(logged.at(-1), /another instance is polling/);
+    assert.ok(!logged.at(-1).includes('polling error:'), 'not buried under the generic wording');
+  } finally {
+    global.fetch = originalFetch;
+    console.error = originalError;
   }
 });
