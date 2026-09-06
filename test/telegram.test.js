@@ -704,9 +704,13 @@ test('a channel post carries the sender caption and none of the original text', 
   assert.equal(documents[0].chatId, '-1004376005872');
   assert.equal(documents[0].caption, 'Мой текст');
 
-  // The confirmation goes to the sender, not the channel.
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].chatId, '12345');
+  // A status message goes out first and the report follows; both belong to the
+  // sender, and neither reaches the channel. This mock has no editMessageText,
+  // so the report arrives as its own message -- the fallback that keeps the
+  // report from being lost when the status cannot be rewritten.
+  assert.ok(messages.length >= 1);
+  assert.ok(messages.every((entry) => entry.chatId === '12345'));
+  assert.match(messages.at(-1).text, /已发布到频道/);
 });
 
 test('a channel post without a * carries no caption at all', async () => {
@@ -1736,5 +1740,92 @@ test('the polling loop names a token conflict instead of logging it as a generic
   } finally {
     global.fetch = originalFetch;
     console.error = originalError;
+  }
+});
+
+test('a status message is posted first and rewritten into the report', async () => {
+  const originalFetch = global.fetch;
+  const sends = [];
+  const edits = [];
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+    const body = init.body && typeof init.body === 'string' ? JSON.parse(init.body) : {};
+
+    if (target.includes('/sendChatAction')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+    if (target.includes('/sendMessage')) {
+      sends.push(body.text);
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: 700 } }) };
+    }
+    if (target.includes('/editMessageText')) {
+      edits.push({ messageId: body.message_id, text: body.text });
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+    if (target.includes('api.fxtwitter.com')) {
+      return { ok: true, json: async () => ({ code: 404, message: 'NOT_FOUND' }) };
+    }
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      targetChatId: '-100999',
+    });
+
+    await runner.handleMessage({
+      chat: { id: 1 }, text: 'https://x.com/demo/status/1', message_id: 5,
+    });
+
+    // The status goes out before any work is attempted...
+    assert.equal(sends.length, 1);
+    assert.match(sends[0], /Скачиваю и публикую/);
+
+    // ...and the same message becomes the report rather than a second one.
+    assert.equal(edits.length, 1);
+    assert.equal(edits[0].messageId, 700);
+    assert.match(edits[0].text, /失败/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('losing the status message never costs the report', async () => {
+  const originalFetch = global.fetch;
+  const sends = [];
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+    const body = init.body && typeof init.body === 'string' ? JSON.parse(init.body) : {};
+
+    if (target.includes('/sendChatAction')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+    if (target.includes('/sendMessage')) {
+      sends.push(body.text);
+      // No message_id back: the status cannot be tracked or edited.
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+    if (target.includes('api.fxtwitter.com')) {
+      return { ok: true, json: async () => ({ code: 404, message: 'NOT_FOUND' }) };
+    }
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token', allowedChatIds: new Set(), targetChatId: '-100999',
+    });
+
+    await runner.handleMessage({ chat: { id: 1 }, text: 'https://x.com/demo/status/1', message_id: 5 });
+
+    // The report still arrives, as its own message.
+    assert.equal(sends.length, 2);
+    assert.match(sends.at(-1), /失败/);
+  } finally {
+    global.fetch = originalFetch;
   }
 });

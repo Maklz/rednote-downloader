@@ -383,6 +383,15 @@ async function editMessageCaption(token, chatId, messageId, caption) {
   });
 }
 
+async function editMessageText(token, chatId, messageId, text) {
+  return telegramRequest(token, 'editMessageText', {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    disable_web_page_preview: true,
+  });
+}
+
 async function sendChatAction(token, chatId, action) {
   return telegramRequest(token, 'sendChatAction', {
     chat_id: chatId,
@@ -724,8 +733,17 @@ export class TelegramBotRunner {
         return;
       }
 
-      const report = await this.publishToChannel(inputs, { caption, force });
-      await sendText(this.token, chatId, buildBatchReport(report, force, caption), message.message_id);
+      // A large video takes a while, and silence looks the same as a broken
+      // bot. One message is posted up front and rewritten as the work moves,
+      // instead of a new message per step cluttering the chat.
+      const progress = await this.startProgress(chatId, inputs.length, message.message_id);
+      const report = await this.publishToChannel(inputs, {
+        caption,
+        force,
+        onProgress: (done) => progress.update(done),
+      });
+
+      await progress.finish(buildBatchReport(report, force, caption));
     } catch (error) {
       const messageText = error instanceof Error ? error.message : 'Unknown error';
       await sendText(this.token, chatId, `解析失败：${messageText}`, message.message_id);
@@ -738,7 +756,54 @@ export class TelegramBotRunner {
    * a gallery. One publication record covers the whole message, so /undo takes
    * back everything that message produced, not only its last link.
    */
-  async publishToChannel(inputs, { caption, force }) {
+  /**
+   * A single status message that is rewritten as work proceeds and replaced by
+   * the final report. Every Telegram call here is allowed to fail quietly: this
+   * is decoration, and losing it must never cost the publication itself.
+   */
+  async startProgress(chatId, total, replyToMessageId) {
+    const token = this.token;
+    let messageId = null;
+
+    const text = (done) => (total > 1
+      ? `Обрабатываю ${done + 1} из ${total}…`
+      : 'Скачиваю и публикую…');
+
+    try {
+      const sent = await sendText(token, chatId, text(0), replyToMessageId);
+      messageId = sent?.message_id ?? null;
+    } catch {
+      // No status message; the work still happens.
+    }
+
+    return {
+      update: async (done) => {
+        if (messageId === null || total <= 1) {
+          return;
+        }
+
+        try {
+          await editMessageText(token, chatId, messageId, text(done));
+        } catch {
+          // Editing too often hits a rate limit; the count is not worth a retry.
+        }
+      },
+      finish: async (finalText) => {
+        if (messageId === null) {
+          await sendText(token, chatId, finalText, replyToMessageId).catch(() => {});
+          return;
+        }
+
+        try {
+          await editMessageText(token, chatId, messageId, finalText);
+        } catch {
+          await sendText(token, chatId, finalText, replyToMessageId).catch(() => {});
+        }
+      },
+    };
+  }
+
+  async publishToChannel(inputs, { caption, force, onProgress }) {
     const report = {
       published: [], skipped: [], empty: [], failed: [],
     };
@@ -778,6 +843,9 @@ export class TelegramBotRunner {
         noteIds.push(noteKey);
         report.published.push(input);
         await this.rememberPublishedNote(noteKey);
+        if (onProgress) {
+          await onProgress(report.published.length);
+        }
       } catch (error) {
         report.failed.push({
           input,
