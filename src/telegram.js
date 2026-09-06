@@ -110,6 +110,30 @@ export function parseRepublishCommand(text) {
   return { force: false, text: source };
 }
 
+const CAPTION_COMMAND = '/caption';
+
+/**
+ * Detects "/caption <text>", the way to fix the wording of the last channel
+ * post without uploading its media again. Returns null when the message is not
+ * that command, and an empty caption when the text is left out, which clears
+ * the caption rather than rejecting the request.
+ */
+export function parseCaptionCommand(text) {
+  const trimmed = String(text || '').trimStart();
+
+  if (!trimmed.startsWith(CAPTION_COMMAND)) {
+    return null;
+  }
+
+  // Telegram appends @botname to commands sent in groups.
+  const rest = trimmed.slice(CAPTION_COMMAND.length).replace(/^@\S+/, '');
+  if (rest && !/^\s/.test(rest)) {
+    return null;
+  }
+
+  return { caption: trimCaption(rest) };
+}
+
 const XHS_NOTE_ID_PATTERN = /^[0-9a-f]{24}$/i;
 const PUBLISHED_LIST_LIMIT = 20;
 
@@ -304,6 +328,14 @@ async function deleteMessage(token, chatId, messageId) {
   return telegramRequest(token, 'deleteMessage', {
     chat_id: chatId,
     message_id: messageId,
+  });
+}
+
+async function editMessageCaption(token, chatId, messageId, caption) {
+  return telegramRequest(token, 'editMessageCaption', {
+    chat_id: chatId,
+    message_id: messageId,
+    caption,
   });
 }
 
@@ -507,6 +539,7 @@ function buildHelpText() {
     '',
     '/list 可以看已经发布过哪些帖子。',
     '/undo 撤回上一次发布，频道里的消息会被删掉，那条帖子也能重新发。',
+    '/caption 新的说明 直接改上一次发布的说明，不用重新上传。',
     '',
     '如果你想保留原始文件质量，保持默认 document 模式就可以。',
   ].join('\n');
@@ -609,6 +642,12 @@ export class TelegramBotRunner {
       return;
     }
 
+    const captionEdit = parseCaptionCommand(text);
+    if (captionEdit) {
+      await sendText(this.token, chatId, await this.editLastCaption(captionEdit.caption), message.message_id);
+      return;
+    }
+
     const { force, text: requestText } = parseRepublishCommand(text);
     const { linkText, caption } = parsePublishRequest(requestText);
 
@@ -705,6 +744,27 @@ export class TelegramBotRunner {
     }
 
     return report;
+  }
+
+  /**
+   * Rewrites the caption of the last publication in place. Only the first
+   * message of a publication carries one -- the rest of a gallery is bare -- so
+   * that is the one edited, and the media is left alone rather than re-uploaded.
+   */
+  async editLastCaption(caption) {
+    const record = this.lastPublication;
+
+    if (!record?.messageIds?.length) {
+      return '没有可以改说明的发布。';
+    }
+
+    try {
+      await editMessageCaption(this.token, record.chatId, record.messageIds[0], caption);
+    } catch (error) {
+      return `改说明失败：${error instanceof Error ? error.message : error}`;
+    }
+
+    return caption ? '说明已更新。' : '说明已清空。';
   }
 
   async rememberLastPublication(record) {

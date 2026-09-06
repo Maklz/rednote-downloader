@@ -6,6 +6,7 @@ import {
   buildBatchReport,
   buildPublishConfirmation,
   buildPublishedListText,
+  parseCaptionCommand,
   parsePublishRequest,
   parseRepublishCommand,
   buildTelegramCaption,
@@ -1467,6 +1468,100 @@ test('one bad link does not stop the rest of the message', async () => {
     assert.equal(posts.length, 1, 'the good link still goes out');
     assert.match(replies.at(-1), /已发布 1 条/);
     assert.match(replies.at(-1), /失败：https:\/\/evil\.example\/post/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('parseCaptionCommand recognises the command and leaves other text alone', () => {
+  assert.deepEqual(parseCaptionCommand('/caption Новый текст'), { caption: 'Новый текст' });
+  assert.deepEqual(parseCaptionCommand('/caption@mutantur_bot Новый текст'), { caption: 'Новый текст' });
+
+  // No text clears the caption rather than being rejected.
+  assert.deepEqual(parseCaptionCommand('/caption'), { caption: '' });
+  assert.deepEqual(parseCaptionCommand('/caption   '), { caption: '' });
+
+  // Not the command.
+  assert.equal(parseCaptionCommand('/captionsomething text'), null);
+  assert.equal(parseCaptionCommand('https://x.com/a * /caption'), null);
+  assert.equal(parseCaptionCommand(''), null);
+});
+
+test('/caption rewrites the first message of the last publication', async () => {
+  const originalFetch = global.fetch;
+  const edits = [];
+  const replies = [];
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+
+    if (target.includes('/editMessageCaption')) {
+      edits.push(JSON.parse(init.body));
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('/sendMessage')) {
+      replies.push(JSON.parse(init.body).text);
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      targetChatId: '-100999',
+      // A gallery: only the first message carries a caption.
+      initialLastPublication: { chatId: '-100999', noteIds: ['n1'], messageIds: [501, 502, 503] },
+    });
+
+    await runner.handleMessage({ chat: { id: 1 }, text: '/caption Исправленный текст', message_id: 1 });
+
+    assert.equal(edits.length, 1, 'only the caption-carrying message is touched');
+    assert.equal(edits[0].message_id, 501);
+    assert.equal(edits[0].chat_id, '-100999');
+    assert.equal(edits[0].caption, 'Исправленный текст');
+    assert.match(replies.at(-1), /说明已更新/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('/caption reports having nothing to edit, and a refusal from Telegram', async () => {
+  const originalFetch = global.fetch;
+  const replies = [];
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+    if (target.includes('/editMessageCaption')) {
+      throw new Error('message to edit not found');
+    }
+    if (target.includes('/sendMessage')) {
+      replies.push(JSON.parse(init.body).text);
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const empty = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      targetChatId: '-100999',
+    });
+    await empty.handleMessage({ chat: { id: 1 }, text: '/caption текст', message_id: 1 });
+    assert.match(replies.at(-1), /没有可以改说明的发布/);
+
+    const stale = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      targetChatId: '-100999',
+      initialLastPublication: { chatId: '-100999', noteIds: ['n1'], messageIds: [501] },
+    });
+    await stale.handleMessage({ chat: { id: 1 }, text: '/caption текст', message_id: 2 });
+    assert.match(replies.at(-1), /改说明失败：message to edit not found/);
   } finally {
     global.fetch = originalFetch;
   }

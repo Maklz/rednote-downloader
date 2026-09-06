@@ -110,7 +110,9 @@ DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
   first of them. `/list` shows what the channel already has and `/undo` takes the
   last publication back, deleting its messages and freeing the note to be published
   again. A message may carry several links; each is published in turn, the caption
-  goes on the first post, and the reply accounts for every link. The bot must be an
+  goes on the first post, and the reply accounts for every link. `/caption <text>`
+  rewrites the caption of the last publication in place, without re-uploading its
+  media. The bot must be an
   administrator of the channel.
 - `REDNOTE_ADMIN_TOKEN`: optional admin token required by protected management endpoints.
 - `CORS_ALLOWED_ORIGINS`: optional comma-separated list of extra allowed origins.
