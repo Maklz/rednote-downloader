@@ -114,6 +114,16 @@ DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
   rewrites the caption of the last publication in place, without re-uploading its
   media. The bot must be an
   administrator of the channel.
+- `YTDLP_COMMAND` / `PYTHON_COMMAND`: optional. Links from sites the built-in
+  resolvers do not know (YouTube, TikTok, Instagram and the rest) are handed to
+  yt-dlp. Defaults to `python -m yt_dlp`; set `YTDLP_COMMAND` to use a standalone
+  binary. Without yt-dlp installed those links simply fail, and the supported
+  platforms are unaffected.
+- `FFMPEG_LOCATION`: optional directory holding ffmpeg. yt-dlp needs it to merge
+  the separate video and audio streams the better formats come in; without it the
+  quality is capped at whatever pre-muxed stream the site offers.
+- `YTDLP_FORMAT`: optional yt-dlp format selector. Defaults to 1080p or below,
+  which is past the point Telegram re-encodes anyway.
 - `REDNOTE_ADMIN_TOKEN`: optional admin token required by protected management endpoints.
 - `CORS_ALLOWED_ORIGINS`: optional comma-separated list of extra allowed origins.
   Behind a reverse proxy the public origin must be listed here: `X-Forwarded-Host`
