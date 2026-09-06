@@ -854,3 +854,39 @@ test('downloadMedia removes partial files when all retry attempts fail', async (
     global.fetch = originalFetch;
   }
 });
+
+test('extractVideo reports the frame size and length Telegram needs', () => {
+  const video = extractVideo({
+    video: {
+      capa: { duration: 69 },
+      media: {
+        stream: {
+          h264: [{ masterUrl: 'https://sns-video-bd.xhscdn.com/a.mp4', width: 720, height: 1280, duration: 69734 }],
+        },
+      },
+    },
+  });
+
+  assert.equal(video.width, 720);
+  assert.equal(video.height, 1280);
+  // capa reports whole seconds; the stream entry reports milliseconds. The two
+  // must never be mixed up.
+  assert.equal(video.duration, 69);
+});
+
+test('extractVideo falls back to the stream duration and tolerates missing sizes', () => {
+  const noCapa = extractVideo({
+    video: {
+      media: { stream: { h264: [{ masterUrl: 'https://sns-video-bd.xhscdn.com/a.mp4', width: 1080, height: 1920, duration: 69734 }] } },
+    },
+  });
+  assert.equal(noCapa.duration, 70, 'milliseconds are converted, not passed through');
+
+  const bare = extractVideo({
+    video: { media: { stream: { h264: [{ masterUrl: 'https://sns-video-bd.xhscdn.com/a.mp4' }] } } },
+  });
+  assert.equal(bare.width, null);
+  assert.equal(bare.height, null);
+  assert.equal(bare.duration, null);
+  assert.equal(bare.url, 'https://sns-video-bd.xhscdn.com/a.mp4', 'the video is still usable');
+});

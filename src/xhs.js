@@ -502,6 +502,30 @@ function scoreVideoCandidate(url) {
   return score;
 }
 
+/**
+ * Pulls the frame size and length out of the stream entries. Telegram lays a
+ * video out from these; without them mobile clients guess and stretch it. The
+ * entries carry duration in milliseconds while `capa` reports whole seconds,
+ * so the two are never mixed.
+ */
+function extractVideoDimensions(note, stream) {
+  const entries = [
+    ...(Array.isArray(stream.h265) ? stream.h265 : []),
+    ...(Array.isArray(stream.h264) ? stream.h264 : []),
+  ];
+  const sized = entries.find((entry) => entry?.width > 0 && entry?.height > 0);
+  const capaDuration = Number(note?.video?.capa?.duration);
+  const entryDuration = Number(sized?.duration);
+
+  return {
+    width: sized?.width || null,
+    height: sized?.height || null,
+    duration: Number.isFinite(capaDuration) && capaDuration > 0
+      ? capaDuration
+      : (Number.isFinite(entryDuration) && entryDuration > 0 ? Math.round(entryDuration / 1000) : null),
+  };
+}
+
 export function extractVideo(note) {
   const originKey = note?.video?.consumer?.originVideoKey;
   const stream = note?.video?.media?.stream || {};
@@ -520,6 +544,7 @@ export function extractVideo(note) {
     index: 1,
     type: 'video',
     url,
+    ...extractVideoDimensions(note, stream),
     fallbackUrls: candidates.filter((candidate) => candidate !== url),
   };
 }

@@ -218,6 +218,29 @@ export function buildBatchReport(report, force, caption) {
   return lines.length ? lines.join('\n') : '没有可发布的内容。';
 }
 
+/**
+ * The width, height and duration Telegram needs to lay a video out. Only fields
+ * the source actually reported are returned: sending a guessed or partial size
+ * is worse than sending none, because Telegram trusts what it is told.
+ */
+export function buildVideoDimensions(item) {
+  const dimensions = {};
+  const width = Number(item?.width);
+  const height = Number(item?.height);
+  const duration = Number(item?.duration);
+
+  if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+    dimensions.width = Math.round(width);
+    dimensions.height = Math.round(height);
+  }
+
+  if (Number.isFinite(duration) && duration > 0) {
+    dimensions.duration = Math.round(duration);
+  }
+
+  return dimensions;
+}
+
 export function inferTelegramFileName(item, note, index) {
   return inferMediaFileName(item, note, index, {
     totalItems: Array.isArray(note?.media) ? note.media.length : 1,
@@ -375,6 +398,12 @@ async function uploadMediaAsTelegramFile(token, method, fieldName, chatId, item,
     // something the viewer can start playing before it has finished arriving.
     if (fieldName === 'video') {
       body.append('supports_streaming', 'true');
+
+      // Told the real shape, Telegram lays the player out correctly. Left to
+      // guess, mobile clients stretch the video to whatever they assumed.
+      for (const [field, value] of Object.entries(buildVideoDimensions(item))) {
+        body.append(field, String(value));
+      }
     }
 
     body.append(fieldName, upload.fileBlob, upload.fileName);
@@ -412,6 +441,7 @@ async function uploadMediaGroup(token, chatId, note, items, startIndex, options 
 
       if (mediaEntry.type === 'video') {
         mediaEntry.supports_streaming = true;
+        Object.assign(mediaEntry, buildVideoDimensions(item));
       }
 
       if (offset === 0 && options.caption) {

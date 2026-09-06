@@ -10,6 +10,7 @@ import {
   parsePublishRequest,
   parseRepublishCommand,
   buildTelegramCaption,
+  buildVideoDimensions,
   chunkTelegramMedia,
   getTelegramMediaGroupType,
   inferTelegramFileName,
@@ -1580,4 +1581,101 @@ test('buildPublishedListText links X posts, not just RedNote notes', () => {
   // An entry that already is a URL is left alone rather than wrapped again.
   // Newest first, so the last one stored leads the list.
   assert.match(text, /^1\. https:\/\/x\.com\/demo\/status\/1$/m);
+});
+
+test('buildVideoDimensions passes on only what the source actually reported', () => {
+  assert.deepEqual(
+    buildVideoDimensions({ width: 720, height: 1280, duration: 69 }),
+    { width: 720, height: 1280, duration: 69 },
+  );
+
+  // A half-known size is worse than none: Telegram trusts what it is told.
+  assert.deepEqual(buildVideoDimensions({ width: 720, duration: 69 }), { duration: 69 });
+  assert.deepEqual(buildVideoDimensions({ width: 720, height: 0 }), {});
+  assert.deepEqual(buildVideoDimensions({}), {});
+  assert.deepEqual(buildVideoDimensions(null), {});
+
+  // Values arrive as strings from some sources.
+  assert.deepEqual(
+    buildVideoDimensions({ width: '720', height: '1280', duration: '69.4' }),
+    { width: 720, height: 1280, duration: 69 },
+  );
+});
+
+test('a video upload tells Telegram its real shape', async () => {
+  const originalFetch = global.fetch;
+  let sent;
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+
+    if (target.includes('/sendChatAction')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    if (target.includes('api.fxtwitter.com/demo/status/1')) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          tweet: {
+            id: '1',
+            url: 'https://x.com/demo/status/1',
+            text: '示例',
+            author: { id: 'u', name: 'Demo', screen_name: 'demo' },
+            media: {
+              all: [{
+                type: 'video',
+                url: 'https://video.twimg.com/demo/a.mp4',
+                width: 720,
+                height: 1280,
+                duration: 69.7,
+              }],
+            },
+          },
+        }),
+      };
+    }
+
+    if (target.includes('twimg.com')) {
+      return new Response(new Uint8Array([1]), {
+        status: 200,
+        headers: { 'Content-Type': 'video/mp4' },
+      });
+    }
+
+    if (target.includes('/sendVideo')) {
+      sent = {
+        width: init.body.get('width'),
+        height: init.body.get('height'),
+        duration: init.body.get('duration'),
+        streaming: init.body.get('supports_streaming'),
+      };
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: 1 } }) };
+    }
+
+    if (target.includes('/sendMessage')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      deliveryMode: 'preview',
+      targetChatId: '-100999',
+    });
+
+    await runner.handleMessage({ chat: { id: 1 }, text: 'https://x.com/demo/status/1', message_id: 1 });
+
+    assert.equal(sent.width, '720');
+    assert.equal(sent.height, '1280');
+    assert.equal(sent.duration, '70');
+    assert.equal(sent.streaming, 'true');
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
