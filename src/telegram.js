@@ -135,7 +135,24 @@ export function parseCaptionCommand(text) {
 }
 
 const XHS_NOTE_ID_PATTERN = /^[0-9a-f]{24}$/i;
+// X post ids are long decimal numbers; /i/status/<id> resolves to the post
+// whoever wrote it, so the author handle is not needed to link back.
+const X_POST_ID_PATTERN = /^\d{2,25}$/;
 const PUBLISHED_LIST_LIMIT = 20;
+
+function buildPublishedEntryLink(entry) {
+  if (XHS_NOTE_ID_PATTERN.test(entry)) {
+    return `https://www.xiaohongshu.com/explore/${entry}`;
+  }
+
+  if (X_POST_ID_PATTERN.test(entry)) {
+    return `https://x.com/i/status/${entry}`;
+  }
+
+  // Anything else is already a URL: the key falls back to one when the post
+  // carried no id of its own.
+  return entry;
+}
 
 /**
  * Renders the published history. Entries are stored as note ids, which are
@@ -151,12 +168,7 @@ export function buildPublishedListText(noteIds, limit = PUBLISHED_LIST_LIMIT) {
 
   // Newest first: the list is appended to as posts go out.
   const shown = entries.slice(-limit).reverse();
-  const lines = shown.map((entry, index) => {
-    const link = XHS_NOTE_ID_PATTERN.test(entry)
-      ? `https://www.xiaohongshu.com/explore/${entry}`
-      : entry;
-    return `${index + 1}. ${link}`;
-  });
+  const lines = shown.map((entry, index) => `${index + 1}. ${buildPublishedEntryLink(entry)}`);
 
   const header = entries.length > shown.length
     ? `已发布 ${entries.length} 条，最近 ${shown.length} 条：`

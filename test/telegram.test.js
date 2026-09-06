@@ -1566,3 +1566,18 @@ test('/caption reports having nothing to edit, and a refusal from Telegram', asy
     global.fetch = originalFetch;
   }
 });
+
+test('buildPublishedListText links X posts, not just RedNote notes', () => {
+  const text = buildPublishedListText([
+    '6a818f8b000000002c002693',
+    '1868239074188902400',
+    'https://x.com/demo/status/1',
+  ]);
+
+  assert.match(text, /https:\/\/www\.xiaohongshu\.com\/explore\/6a818f8b000000002c002693/);
+  // A numeric id is an X post; /i/status resolves without the author handle.
+  assert.match(text, /https:\/\/x\.com\/i\/status\/1868239074188902400/);
+  // An entry that already is a URL is left alone rather than wrapped again.
+  // Newest first, so the last one stored leads the list.
+  assert.match(text, /^1\. https:\/\/x\.com\/demo\/status\/1$/m);
+});
