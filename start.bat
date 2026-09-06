@@ -28,11 +28,7 @@ if not exist "src\server.js" (
 
 rem Set PORT before running this file to use a different one.
 if "%PORT%"=="" set "PORT=3010"
-set "URL=http://127.0.0.1:%PORT%/review"
-
-rem yt-dlp needs ffmpeg to merge the separate video and audio streams that the
-rem better formats come in. Point this at the folder holding ffmpeg.exe.
-if "%FFMPEG_LOCATION%"=="" set "FFMPEG_LOCATION=D:\Creation\FF13"
+set "URL=http://127.0.0.1:%PORT%"
 
 echo Opening %URL% in your browser once the server is up.
 echo Press Ctrl+C in this window to stop the server.
