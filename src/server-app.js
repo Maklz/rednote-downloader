@@ -17,6 +17,14 @@ import {
   sanitizeFileName,
 } from './xhs.js';
 import { buildExternalDouyinConfig, isExternalDouyinConfigured } from './douyin-external.js';
+import {
+  addQueueEntries,
+  getPendingEntries,
+  getQueuePath,
+  loadQueue,
+  saveQueue,
+  updateQueueEntry,
+} from './queue.js';
 import { TelegramBotRunner, parseAllowedChatIds } from './telegram.js';
 import {
   getAppConfigPath,
@@ -48,6 +56,8 @@ const DEFAULT_STATIC_ROUTES = new Map([
   ['/icon.svg', 'icon.svg'],
   ['/media-filenames.js', path.join(process.cwd(), 'src', 'shared', 'media-filenames.js')],
   ['/styles.css', 'styles.css'],
+  ['/review', 'review.html'],
+  ['/review.js', 'review.js'],
 ]);
 
 function normalizeOrigin(value) {
@@ -322,6 +332,7 @@ export function buildServerOptions(options = {}) {
     adminToken,
     adminHeaderName: options.adminHeaderName || DEFAULT_ADMIN_HEADER_NAME,
     corsAllowedOrigins: new Set(corsAllowedOrigins.map(normalizeOrigin).filter(Boolean)),
+    queuePath: options.queuePath || getQueuePath(env, appConfigPath),
     batchResolveConcurrency: normalizePositiveInt(options.batchResolveConcurrency ?? env.BATCH_RESOLVE_CONCURRENCY, 3),
     mediaDownloadConcurrency: normalizePositiveInt(options.mediaDownloadConcurrency ?? env.MEDIA_DOWNLOAD_CONCURRENCY, 3),
     douyinDownloaderOutputDir: buildExternalDouyinConfig(env).outputDir,
@@ -363,8 +374,76 @@ export async function createRednoteApp(options = {}) {
 
   let appConfig = await loadAppConfig(settings.appConfigPath);
   let appState = await loadAppState(settings.appStatePath);
+  let reviewQueue = await loadQueue(settings.queuePath);
   let telegramBot = null;
   let telegramRuntimeConfig = null;
+
+  async function handleQueueRead(request, response) {
+    sendJson(request, response, 200, {
+      ok: true,
+      pending: getPendingEntries(reviewQueue),
+      decided: reviewQueue.entries
+        .filter((entry) => entry.status !== 'pending')
+        .slice(-20)
+        .reverse(),
+      channelConfigured: Boolean(telegramRuntimeConfig?.targetChatId),
+    });
+  }
+
+  async function handleQueueAdd(request, response) {
+    const body = await readJsonBody(request);
+    const candidates = Array.isArray(body?.candidates) ? body.candidates : [body];
+    const { queue, added } = addQueueEntries(reviewQueue, candidates);
+
+    reviewQueue = await saveQueue(settings.queuePath, queue);
+    sendJson(request, response, 200, { ok: true, added: added.length, pending: getPendingEntries(reviewQueue).length });
+  }
+
+  async function handleQueueDecision(request, response, id) {
+    const body = await readJsonBody(request);
+    const entry = getPendingEntries(reviewQueue).find((candidate) => candidate.id === id);
+
+    if (!entry) {
+      sendJson(request, response, 404, { ok: false, error: 'Кандидат не найден или решение по нему уже принято.' });
+      return;
+    }
+
+    if (body?.action === 'reject') {
+      const { queue } = updateQueueEntry(reviewQueue, id, {
+        status: 'rejected',
+        decidedAt: new Date().toISOString(),
+      });
+      reviewQueue = await saveQueue(settings.queuePath, queue);
+      sendJson(request, response, 200, { ok: true, status: 'rejected' });
+      return;
+    }
+
+    if (!telegramBot || !telegramRuntimeConfig?.targetChatId) {
+      sendJson(request, response, 400, { ok: false, error: 'Канал для публикации не настроен.' });
+      return;
+    }
+
+    const caption = typeof body?.caption === 'string' ? body.caption : entry.caption;
+    const report = await telegramBot.publishToChannel([entry.url], { caption, force: false });
+    const failure = report.failed[0];
+    const published = report.published.length > 0;
+
+    // A rejected candidate is a decision; a failed publish is not -- leaving it
+    // pending with the reason attached lets the reviewer retry it.
+    const { queue } = updateQueueEntry(reviewQueue, id, {
+      status: published ? 'published' : 'pending',
+      caption,
+      decidedAt: published ? new Date().toISOString() : '',
+      error: published ? '' : (failure?.reason || 'Опубликовать не удалось.'),
+    });
+
+    reviewQueue = await saveQueue(settings.queuePath, queue);
+    sendJson(request, response, published ? 200 : 502, {
+      ok: published,
+      status: published ? 'published' : 'pending',
+      error: published ? undefined : (failure?.reason || 'Опубликовать не удалось.'),
+    });
+  }
 
   function buildCorsHeaders(request) {
     const origin = normalizeOrigin(request?.headers.origin || '');
@@ -920,6 +999,22 @@ export async function createRednoteApp(options = {}) {
 
       if (request.method === 'POST' && url.pathname === '/api/config') {
         await handleConfigWrite(request, response);
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/queue') {
+        await handleQueueRead(request, response);
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/queue') {
+        await handleQueueAdd(request, response);
+        return;
+      }
+
+      const decisionMatch = url.pathname.match(/^\/api\/queue\/([A-Za-z0-9_-]+)\/decision$/);
+      if (request.method === 'POST' && decisionMatch) {
+        await handleQueueDecision(request, response, decisionMatch[1]);
         return;
       }
 

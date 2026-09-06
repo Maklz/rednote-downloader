@@ -124,6 +124,9 @@ DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
   quality is capped at whatever pre-muxed stream the site offers.
 - `YTDLP_FORMAT`: optional yt-dlp format selector. Defaults to 1080p or below,
   which is past the point Telegram re-encodes anyway.
+- `REVIEW_QUEUE_PATH`: optional path for the review queue. Defaults to
+  `.rednote-queue.json` beside the config file. Candidates are posted to
+  `POST /api/queue`, reviewed at `/review`, and published or rejected from there.
 - `REDNOTE_ADMIN_TOKEN`: optional admin token required by protected management endpoints.
 - `CORS_ALLOWED_ORIGINS`: optional comma-separated list of extra allowed origins.
   Behind a reverse proxy the public origin must be listed here: `X-Forwarded-Host`

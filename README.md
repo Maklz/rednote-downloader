@@ -226,6 +226,8 @@ Telegram 轮询状态路径：
 - `FFMPEG_LOCATION`: 可选，ffmpeg 所在目录。yt-dlp 需要它合并分离的音视频流；没有它画质
   只能取站点提供的已合并流。
 - `YTDLP_FORMAT`: 可选，yt-dlp 格式选择器。默认 1080p 及以下，再高 Telegram 也会重新编码。
+- `REVIEW_QUEUE_PATH`: 可选，待审队列文件路径，默认与配置文件同目录的 `.rednote-queue.json`。
+  候选通过 `POST /api/queue` 加入，在 `/review` 页面上逐条发布或拒绝。
 - `REDNOTE_ADMIN_TOKEN`: 可选，设置后管理接口需要 `X-Admin-Token`。
 - `CORS_ALLOWED_ORIGINS`: 可选，额外允许跨域访问管理接口的 Origin，逗号分隔。
   反向代理部署需要在此列出对外 Origin：判断同源时会忽略 `X-Forwarded-Host` 与
