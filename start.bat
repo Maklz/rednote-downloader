@@ -47,7 +47,8 @@ echo Press Ctrl+C in this window to stop the server.
 echo.
 
 rem Give the server a moment to bind the port before the browser asks for it.
-start "" cmd /c "timeout /t 3 /nobreak >nul & start """" %URL%"
+rem Skipped when started at login: nobody wants a browser tab every boot.
+if not "%NO_BROWSER%"=="1" start "" cmd /c "timeout /t 3 /nobreak >nul & start """" %URL%"
 
 :run
 node src/server.js
