@@ -765,8 +765,10 @@ export class TelegramBotRunner {
     const token = this.token;
     let messageId = null;
 
+    // Clamped: the count is of the link being worked on, and after the last one
+    // finishes there is no next link to name.
     const text = (done) => (total > 1
-      ? `Обрабатываю ${done + 1} из ${total}…`
+      ? `Обрабатываю ${Math.min(done + 1, total)} из ${total}…`
       : 'Скачиваю и публикую…');
 
     try {
@@ -810,6 +812,7 @@ export class TelegramBotRunner {
     const messageIds = [];
     const noteIds = [];
     let captionUsed = false;
+    let attempted = 0;
 
     for (const input of inputs) {
       try {
@@ -843,14 +846,18 @@ export class TelegramBotRunner {
         noteIds.push(noteKey);
         report.published.push(input);
         await this.rememberPublishedNote(noteKey);
-        if (onProgress) {
-          await onProgress(report.published.length);
-        }
       } catch (error) {
         report.failed.push({
           input,
           reason: error instanceof Error ? error.message : String(error),
         });
+      } finally {
+        // Counted per link handled, not per link published: a failure still
+        // moves the batch along, and a counter that stalls on one looks stuck.
+        attempted += 1;
+        if (onProgress) {
+          await onProgress(attempted);
+        }
       }
     }
 

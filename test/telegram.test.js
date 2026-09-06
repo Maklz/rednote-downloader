@@ -1829,3 +1829,58 @@ test('losing the status message never costs the report', async () => {
     global.fetch = originalFetch;
   }
 });
+
+test('the progress counter never overruns and keeps moving past a failure', async () => {
+  const originalFetch = global.fetch;
+  const statuses = [];
+
+  global.fetch = async (url, init = {}) => {
+    const target = String(url);
+    const body = init.body && typeof init.body === 'string' ? JSON.parse(init.body) : {};
+
+    if (target.includes('/sendChatAction')) {
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+    if (target.includes('/sendMessage')) {
+      statuses.push(body.text);
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: 900 } }) };
+    }
+    if (target.includes('/editMessageText')) {
+      statuses.push(body.text);
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    }
+    // Every link fails to resolve, which is the case that used to stall it.
+    if (target.includes('api.fxtwitter.com')) {
+      return { ok: true, json: async () => ({ code: 404, message: 'NOT_FOUND' }) };
+    }
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token', allowedChatIds: new Set(), targetChatId: '-100999',
+    });
+
+    await runner.handleMessage({
+      chat: { id: 1 },
+      text: 'https://x.com/demo/status/1 https://x.com/demo/status/2 https://x.com/demo/status/3',
+      message_id: 5,
+    });
+
+    const counted = statuses.filter((text) => /Обрабатываю/.test(text));
+
+    // Advances on failures too, rather than sitting on "1 из 3" the whole time.
+    assert.ok(counted.length > 1, 'the counter moves even when nothing publishes');
+
+    // Never announces a link that does not exist.
+    for (const text of counted) {
+      const [, shown] = text.match(/Обрабатываю (\d+) из 3/) || [];
+      assert.ok(Number(shown) <= 3, `counter overran: ${text}`);
+    }
+
+    // The report replaces the status rather than piling up after it.
+    assert.match(statuses.at(-1), /失败/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
