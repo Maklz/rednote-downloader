@@ -142,9 +142,16 @@ async function refresh() {
       listEl.append(warn);
     }
 
-    summaryEl.textContent = data.pending.length
-      ? `Ждут решения: ${data.pending.length}`
-      : 'Пока ничего не ждёт решения.';
+    const parts = [
+      data.pending.length ? `Ждут решения: ${data.pending.length}` : 'Пока ничего не ждёт решения.',
+    ];
+
+    if (data.nextResetAt) {
+      const at = new Date(data.nextResetAt);
+      parts.push(`лента обнулится ${at.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`);
+    }
+
+    summaryEl.textContent = parts.join(' · ');
 
     if (!data.pending.length) {
       const empty = document.createElement('div');
